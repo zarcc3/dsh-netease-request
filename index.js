@@ -1320,9 +1320,23 @@ const MOOD_LABELS = Object.freeze({
   calm: '舒缓',
   focus: '专注',
   upbeat: '轻快',
-  night: '夜晚',
-  melancholy: '伤感',
   celebration: '庆祝',
+  romantic: '暧昧',
+  playful: '俏皮',
+  night: '夜晚',
+  lonely: '孤独',
+  melancholy: '伤感',
+  nostalgic: '怀旧',
+  hopeful: '希望',
+  ethereal: '空灵',
+  pastoral: '田园',
+  majestic: '威严',
+  epic: '史诗',
+  battle: '战斗',
+  tense: '紧张',
+  mystery: '悬疑',
+  horror: '惊悚',
+  dark: '黑暗',
 });
 
 const MOOD_OUTPUT_SCHEMA = {
@@ -1669,8 +1683,8 @@ function createToolDefinitions(currentConfig, autoplayController = {}) {
     name: 'netease_play_mood',
     description:
       'Record the current conversation mood for the autoplay feature and, only when the player is stopped, pick one suitable song and play it. '
-      + 'Never interrupts music that is playing or paused. Use when the mood of the conversation changes noticeably '
-      + '(e.g. focus, upbeat, night, melancholy, celebration).',
+      + 'Never interrupts music that is playing or paused. Use when the mood of the conversation changes noticeably, '
+      + 'including fiction / scene writing (e.g. romantic tension 暧昧, majestic 威严, battle, tense, mystery, horror, epic).',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -1678,7 +1692,7 @@ function createToolDefinitions(currentConfig, autoplayController = {}) {
         mood: {
           type: 'string',
           enum: [...MOODS],
-          description: 'Conversation mood. calm, focus, upbeat, night, melancholy or celebration.',
+          description: 'Conversation mood; supports daily moods and fiction scenes such as romantic, majestic, battle, tense, mystery, horror, epic.',
         },
       },
       required: ['mood'],
@@ -1878,7 +1892,7 @@ export function apply(ctx) {
         return { ...base, skipped: current.status };
       }
       const song = await pickSongForMood(autoplay.mood, {
-        searchSongs: async (query) => (await officialSearchSongs(config, query, 5)).songs,
+        searchSongs: async (query) => (await officialSearchSongs(config, query, 10)).songs,
       });
       if (!song) return { ...base, skipped: 'no-song' };
 
@@ -2181,7 +2195,7 @@ export function apply(ctx) {
     text: () => {
       const config = state.config;
       if (!config?.autoplay?.enabled || config.autoplay.followConversation !== true) return '';
-      return '当对话氛围明显变化时，可以调用 netease_play_mood 记录氛围；当前正在播放或暂停时它只会记录，不会切歌；只有当前没有播放时才会挑选一首播放。';
+      return '当对话氛围明显变化时（包括小说/剧情写作中的场景氛围，例如暧昧、威严、紧张、战斗、悬疑、惊悚），可以调用 netease_play_mood 记录氛围；当前正在播放或暂停时它只会记录，不会切歌；只有当前没有播放时才会挑选一首播放。';
     },
   }), 'netease-request: autoplay prompt');
 
