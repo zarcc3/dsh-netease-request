@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "NetEase Music Requests",
+    "description": "Personal song requests over a self-hosted NetEase Cloud Music API: configure the endpoint in Settings and let the agent search songs and resolve playable links."
+  }
+}

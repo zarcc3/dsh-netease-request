@@ -1,0 +1,3 @@
+- insert:
+    - id: netease-request
+      name: '@local/netease-request'

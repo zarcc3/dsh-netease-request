@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="网易云点歌">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff3b5c"/>
+      <stop offset="1" stop-color="#b3122f"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#bg)"/>
+  <circle cx="27" cy="43" r="7.5" fill="#fff"/>
+  <path d="M33.5 43V17.5l15-3.5v22.5" fill="none" stroke="#fff" stroke-width="4.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="46.5" cy="38" r="6.5" fill="#fff"/>
+</svg>
