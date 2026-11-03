@@ -827,7 +827,7 @@ async function enqueuePickedSongs(picked) {
   return { started, added };
 }
 
-export async function queueSongsByQueries(queries) {
+export async function queueSongsByQueries(queries, options = {}) {
   const list = (Array.isArray(queries) ? queries : [])
     .filter((query) => typeof query === 'string' && query.trim() !== '')
     .slice(0, 10);
@@ -857,6 +857,14 @@ export async function queueSongsByQueries(queries) {
       seen.add(key);
       unique.push(song);
     }
+  }
+  if (options.replace === true) {
+    const clear = await runCli(['queue', 'clear'], { timeoutMs: 20_000 });
+    const clearPayload = parseJsonOutput(clear.stdout) ?? parseJsonOutput(clear.stderr) ?? {};
+    if (clear.code !== 0 || clearPayload.success === false) {
+      throw new Error(withModeHint(clearPayload.message || cliFailureText(clear)));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
   }
   const { started, added } = await enqueuePickedSongs(unique);
   return { requested: list.length, started, added, failed };
@@ -1325,7 +1333,8 @@ function createToolDefinitions(currentConfig) {
     name: 'netease_queue_songs',
     description:
       'Search one or more song queries through the official ncm-cli and add the best playable match of each to the playback queue. '
-      + 'Starts playback automatically when idle. Use when the user asks to play or queue a specific set of songs (e.g. 就放这几首).',
+      + 'Starts playback automatically when idle. Set replace=true to clear the current queue first. '
+      + 'Use when the user asks to play or queue a specific set of songs (e.g. 就放这几首).',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -1336,6 +1345,10 @@ function createToolDefinitions(currentConfig) {
           minItems: 1,
           maxItems: 10,
           description: 'One query per song, ideally title plus artist.',
+        },
+        replace: {
+          type: 'boolean',
+          description: 'Clear the current playback queue before adding these songs. Defaults to false.',
         },
       },
       required: ['queries'],
@@ -1356,7 +1369,7 @@ function createToolDefinitions(currentConfig) {
       };
     },
     async execute(args) {
-      const result = await queueSongsByQueries(args?.queries);
+      const result = await queueSongsByQueries(args?.queries, { replace: args?.replace === true });
       return { ok: true, ...result };
     },
   };
