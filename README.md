@@ -1,4 +1,4 @@
-﻿# 网易云点歌（DSH 插件）
+# 网易云点歌（DSH 插件）
 
 在 DeepSeek Harness Web UI 里通过**网易云音乐开放平台**搜索、点歌并在本机播放的个人插件。
 
@@ -9,6 +9,8 @@
 - **Agent 工具**
   - `netease_search_songs`：搜索歌曲，返回歌名、歌手、专辑、时长、是否可播、网易云页面链接
   - `netease_request_song`：点歌并在本机播放（mpv）
+  - `netease_queue_liked`：从「喜欢的音乐」随机加 N 首到队列；没有播放时会先开始播放第一首
+  - `netease_play_playlist`：按歌单名播放创建或收藏的歌单
 - **侧边栏播放器**
   - 常驻音符按钮，点击展开播放面板
   - 当前歌曲、进度、播放/暂停、下一首

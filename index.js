@@ -622,6 +622,159 @@ export async function officialRequestSong(config, options, signal) {
 /* Model-facing text and tool definitions                              */
 /* ------------------------------------------------------------------ */
 
+export async function listPlaylists() {
+  const playlists = [];
+  for (const kind of ['created', 'collected']) {
+    const result = await runCli(
+      ['--output', 'json', 'playlist', kind, '--userInput', '查看我的歌单'],
+      { timeoutMs: 30_000 },
+    );
+    if (result.code !== 0) {
+      throw new Error(withModeHint(cliFailureText(result)));
+    }
+    const payload = parseJsonOutput(result.stdout) ?? parseJsonOutput(result.stderr) ?? {};
+    const records = Array.isArray(payload?.data?.records) ? payload.data.records : [];
+    for (const record of records) {
+      if (!record || typeof record !== 'object' || !record.id) continue;
+      playlists.push({
+        kind,
+        name: String(record.name ?? ''),
+        encryptedId: String(record.id),
+        originalId: String(record.originalId ?? ''),
+        trackCount: Number(record.trackCount) || 0,
+      });
+    }
+  }
+  return playlists;
+}
+
+export function matchPlaylistByName(playlists, name) {
+  const query = String(name ?? '').trim().toLowerCase();
+  if (query === '') throw new Error('请提供歌单名称');
+  const exact = playlists.filter((playlist) => playlist.name.toLowerCase() === query);
+  if (exact.length === 1) return exact[0];
+  if (exact.length > 1) {
+    throw new Error(`存在多个同名歌单「${name}」，请换一个更具体的名称。`);
+  }
+  const partial = playlists.filter((playlist) => playlist.name.toLowerCase().includes(query));
+  if (partial.length === 1) return partial[0];
+  if (partial.length > 1) {
+    throw new Error(`找到多个匹配「${name}」的歌单：${partial.map((playlist) => `「${playlist.name}」`).join('、')}，请用完整名称。`);
+  }
+  throw new Error(`没有找到歌单「${name}」。`);
+}
+
+async function fetchPlaylistTracks(playlist) {
+  const tracks = [];
+  let offset = 0;
+  while (offset < 5000) {
+    const result = await runCli(
+      [
+        '--output', 'json', 'playlist', 'tracks',
+        '--playlistId', playlist.encryptedId,
+        '--limit', '500',
+        '--offset', String(offset),
+        '--userInput', `读取歌单「${playlist.name}」`,
+      ],
+      { timeoutMs: 45_000 },
+    );
+    if (result.code !== 0) throw new Error(withModeHint(cliFailureText(result)));
+    const payload = parseJsonOutput(result.stdout) ?? parseJsonOutput(result.stderr) ?? {};
+    const page = Array.isArray(payload?.data) ? payload.data : [];
+    tracks.push(...page);
+    if (page.length < 500) break;
+    offset += 500;
+  }
+  return tracks.filter((track) => track && track.playFlag !== false && track.id && track.originalId);
+}
+
+function playlistSongSummary(track) {
+  const id = Number(track.originalId) || 0;
+  const album = track.album && typeof track.album === 'object' ? String(track.album.name ?? '') : '';
+  return {
+    id,
+    name: String(track.name ?? ''),
+    artists: artistNames(track),
+    album,
+  };
+}
+
+export async function queueLikedSongs(count = 5) {
+  const requested = Math.min(Math.max(Math.round(Number(count) || 5), 1), 20);
+  const playlists = await listPlaylists();
+  const liked = playlists.find((playlist) => playlist.name.includes('喜欢的音乐'))
+    ?? playlists.find((playlist) => playlist.kind === 'created' && playlist.name.includes('喜欢'));
+  if (!liked) throw new Error('没有找到「喜欢的音乐」歌单。');
+  const tracks = await fetchPlaylistTracks(liked);
+  if (tracks.length === 0) throw new Error('喜欢的音乐里没有可播放的歌曲。');
+
+  const shuffled = [...tracks];
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swap = Math.floor(Math.random() * (index + 1));
+    [shuffled[index], shuffled[swap]] = [shuffled[swap], shuffled[index]];
+  }
+  const picked = shuffled.slice(0, Math.min(requested, shuffled.length));
+
+  let active = false;
+  try {
+    const stateResult = await runCli(['state'], { timeoutMs: 15_000 });
+    const statePayload = parseJsonOutput(stateResult.stdout) ?? parseJsonOutput(stateResult.stderr) ?? {};
+    active = statePayload?.state?.status === 'playing' || statePayload?.state?.status === 'paused';
+  } catch {
+    active = false;
+  }
+
+  const added = [];
+  let started = false;
+  let toQueue = picked;
+  if (!active && picked.length > 0) {
+    const first = picked[0];
+    const play = await runCli(
+      ['play', '--song', '--encrypted-id', String(first.id), '--original-id', String(first.originalId)],
+      { timeoutMs: 60_000 },
+    );
+    const playPayload = parseJsonOutput(play.stdout) ?? parseJsonOutput(play.stderr) ?? {};
+    if (play.code !== 0 || playPayload.success === false) {
+      throw new Error(withModeHint(playPayload.message || cliFailureText(play)));
+    }
+    started = true;
+    added.push(playlistSongSummary(first));
+    toQueue = picked.slice(1);
+    if (toQueue.length > 0) await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+
+  for (const track of toQueue) {
+    const result = await runCli(
+      ['queue', 'add', '--encrypted-id', String(track.id), '--original-id', String(track.originalId)],
+      { timeoutMs: 20_000 },
+    );
+    const payload = parseJsonOutput(result.stdout) ?? parseJsonOutput(result.stderr) ?? {};
+    if (result.code !== 0 || payload.success === false) {
+      throw new Error(withModeHint(payload.message || cliFailureText(result)));
+    }
+    added.push(playlistSongSummary(track));
+  }
+  return { playlist: liked.name, requested, started, added };
+}
+
+export async function playPlaylistByName(name) {
+  const playlists = await listPlaylists();
+  const playlist = matchPlaylistByName(playlists, name);
+  const result = await runCli(
+    [
+      'play', '--playlist',
+      '--encrypted-id', playlist.encryptedId,
+      '--original-id', playlist.originalId !== '' ? playlist.originalId : playlist.encryptedId,
+    ],
+    { timeoutMs: 60_000 },
+  );
+  const payload = parseJsonOutput(result.stdout) ?? parseJsonOutput(result.stderr) ?? {};
+  if (result.code !== 0 || payload.success === false) {
+    throw new Error(withModeHint(payload.message || cliFailureText(result)));
+  }
+  return { name: playlist.name, kind: playlist.kind, trackCount: playlist.trackCount };
+}
+
 function publicSong(song) {
   return {
     id: song.id,
@@ -722,6 +875,62 @@ const REQUEST_OUTPUT_SCHEMA = {
   required: ['ok', 'keywords', 'total', 'song', 'playback', 'alternatives'],
 };
 
+const PLAYLIST_SONG_SCHEMA = {
+  type: 'object',
+  properties: {
+    id: { type: 'integer' },
+    name: { type: 'string' },
+    artists: { type: 'array', items: { type: 'string' } },
+    album: { type: 'string' },
+  },
+  required: ['id', 'name', 'artists', 'album'],
+};
+
+const QUEUE_LIKED_OUTPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean' },
+    playlist: { type: 'string' },
+    requested: { type: 'integer' },
+    started: { type: 'boolean' },
+    added: { type: 'array', items: PLAYLIST_SONG_SCHEMA },
+  },
+  required: ['ok', 'playlist', 'requested', 'started', 'added'],
+};
+
+const PLAY_PLAYLIST_OUTPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean' },
+    name: { type: 'string' },
+    kind: { type: 'string' },
+    trackCount: { type: 'integer' },
+  },
+  required: ['ok', 'name', 'kind', 'trackCount'],
+};
+
+function formatQueueLiked(value) {
+  if (!Array.isArray(value.added) || value.added.length === 0) {
+    return `没有从「${value.playlist}」加入歌曲。`;
+  }
+  const label = (song) => {
+    const artist = song.artists.length > 0 ? ` — ${song.artists.join('/')}` : '';
+    return `${song.name}${artist}`;
+  };
+  if (value.started === true) {
+    const first = value.added[0];
+    const rest = value.added.slice(1);
+    const lines = [`当前没有播放，已开始播放：${label(first)}`];
+    if (rest.length > 0) {
+      lines.push(`并把剩余 ${rest.length} 首加入队列：`);
+      rest.forEach((song, index) => lines.push(`${index + 1}. ${label(song)}`));
+    }
+    return lines.join('\n');
+  }
+  const lines = value.added.map((song, index) => `${index + 1}. ${label(song)}`);
+  return [`已从「${value.playlist}」加入 ${value.added.length} 首到队列：`, ...lines].join('\n');
+}
+
 function createToolDefinitions(currentConfig) {
   const searchTool = {
     name: 'netease_search_songs',
@@ -818,7 +1027,81 @@ function createToolDefinitions(currentConfig) {
     },
   };
 
-  return [searchTool, requestTool];
+  const queueLikedTool = {
+    name: 'netease_queue_liked',
+    description:
+      'Add N random songs from the user\'s NetEase "喜欢的音乐" playlist to the current playback queue through the official ncm-cli. '
+      + 'Current playback is not interrupted. Use when the user asks to queue or add liked songs (e.g. 加几首我喜欢的歌到队列).',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        count: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 20,
+          description: 'How many random liked songs to add. Defaults to 5.',
+        },
+      },
+    },
+    output: {
+      schema: QUEUE_LIKED_OUTPUT_SCHEMA,
+      render: (_args, value) => [{ type: 'text', text: formatQueueLiked(value) }],
+    },
+    timeoutMs: 120_000,
+    isConcurrencySafe: () => false,
+    presentCall(args) {
+      return {
+        card: 'generic',
+        title: `加入喜欢的歌：${args?.count ?? 5} 首`,
+        kind: 'search',
+        rawInput: args,
+      };
+    },
+    async execute(args) {
+      const result = await queueLikedSongs(args?.count ?? 5);
+      return { ok: true, ...result };
+    },
+  };
+
+  const playPlaylistTool = {
+    name: 'netease_play_playlist',
+    description:
+      'Play one of the user\'s NetEase playlists by name through the official ncm-cli. '
+      + 'Supports created and collected playlists, matched exactly or by a unique partial name. '
+      + 'Use when the user asks to play a playlist (播放某个歌单).',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        name: {
+          type: 'string',
+          description: 'Playlist name, exact or a unique partial match.',
+        },
+      },
+      required: ['name'],
+    },
+    output: {
+      schema: PLAY_PLAYLIST_OUTPUT_SCHEMA,
+      render: (_args, value) => [{ type: 'text', text: `开始播放歌单「${value.name}」（${value.trackCount} 首）。` }],
+    },
+    timeoutMs: 120_000,
+    isConcurrencySafe: () => false,
+    presentCall(args) {
+      return {
+        card: 'generic',
+        title: `播放歌单：${String(args?.name ?? '')}`,
+        kind: 'search',
+        rawInput: args,
+      };
+    },
+    async execute(args) {
+      const result = await playPlaylistByName(args?.name);
+      return { ok: true, ...result };
+    },
+  };
+
+  return [searchTool, requestTool, queueLikedTool, playPlaylistTool];
 }
 
 /* ------------------------------------------------------------------ */
