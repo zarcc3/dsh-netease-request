@@ -16,6 +16,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
+import { MOODS, normalizeMood, pickSongForMood } from './mood.js';
 
 const ROUTE_ROOT = '/plugin-api/netease-request';
 const CONFIG_DIR_NAME = 'netease-request';
@@ -31,10 +32,19 @@ export const DEFAULT_OFFICIAL = Object.freeze({
   player: 'mpv',
 });
 
+export const DEFAULT_AUTOPLAY = Object.freeze({
+  enabled: false,
+  onStartup: true,
+  pollMinutes: 5,
+  startupMood: 'calm',
+  followConversation: true,
+});
+
 export const DEFAULT_CONFIG = Object.freeze({
   searchLimit: 10,
   volume: 50,
   official: DEFAULT_OFFICIAL,
+  autoplay: DEFAULT_AUTOPLAY,
 });
 
 export function songPageUrl(id) {
@@ -91,6 +101,21 @@ function normalizeOfficial(input = {}, base = DEFAULT_OFFICIAL) {
   };
 }
 
+function normalizeAutoplay(input = {}, base = DEFAULT_AUTOPLAY) {
+  const source = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  const merged = { ...base, ...source };
+  const rawMinutes = Number(merged.pollMinutes);
+  return {
+    enabled: merged.enabled === true,
+    onStartup: merged.onStartup !== false,
+    pollMinutes: Number.isFinite(rawMinutes)
+      ? Math.min(Math.max(Math.round(rawMinutes), 1), 60)
+      : DEFAULT_AUTOPLAY.pollMinutes,
+    startupMood: MOODS.includes(merged.startupMood) ? merged.startupMood : DEFAULT_AUTOPLAY.startupMood,
+    followConversation: merged.followConversation !== false,
+  };
+}
+
 export function normalizeConfig(input = {}, base = DEFAULT_CONFIG) {
   const source = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
   const merged = { ...base, ...source };
@@ -104,6 +129,7 @@ export function normalizeConfig(input = {}, base = DEFAULT_CONFIG) {
       ? Math.min(Math.max(Math.round(rawVolume), 0), 100)
       : DEFAULT_CONFIG.volume,
     official: normalizeOfficial(merged.official, base.official ?? DEFAULT_OFFICIAL),
+    autoplay: normalizeAutoplay(merged.autoplay, base.autoplay ?? DEFAULT_AUTOPLAY),
   };
 }
 
@@ -118,6 +144,7 @@ export function publicConfig(config) {
       privateKeySet: config.official.privateKey !== '',
       player: config.official.player,
     },
+    autoplay: config.autoplay,
   };
 }
 
@@ -1289,7 +1316,41 @@ function formatRecommendSongs(value) {
   return lines.join('\n');
 }
 
-function createToolDefinitions(currentConfig) {
+const MOOD_LABELS = Object.freeze({
+  calm: '舒缓',
+  focus: '专注',
+  upbeat: '轻快',
+  night: '夜晚',
+  melancholy: '伤感',
+  celebration: '庆祝',
+});
+
+const MOOD_OUTPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean' },
+    mood: { type: 'string' },
+    played: { oneOf: [SONG_SCHEMA, { type: 'null' }] },
+    skipped: { type: 'string' },
+  },
+  required: ['ok', 'mood', 'played', 'skipped'],
+};
+
+function formatMoodResult(value) {
+  const label = MOOD_LABELS[value.mood] ?? value.mood;
+  if (value.played) {
+    const artist = value.played.artists.length > 0 ? ` — ${value.played.artists.join('/')}` : '';
+    return `氛围「${label}」：已开始播放 ${value.played.name}${artist}。`;
+  }
+  if (value.skipped === 'playing') return `已记录氛围「${label}」；当前正在播放，不切歌。`;
+  if (value.skipped === 'paused') return `已记录氛围「${label}」；当前已暂停，保持现状。`;
+  if (value.skipped === 'disabled') return `已记录氛围「${label}」；自动播放未开启。`;
+  if (value.skipped === 'no-song') return `已记录氛围「${label}」；没有找到适合的歌曲。`;
+  if (value.skipped === 'error') return `已记录氛围「${label}」；本轮播放失败。`;
+  return `已记录氛围「${label}」；本轮未播放。`;
+}
+
+function createToolDefinitions(currentConfig, autoplayController = {}) {
   const searchTool = {
     name: 'netease_search_songs',
     description:
@@ -1604,7 +1665,58 @@ function createToolDefinitions(currentConfig) {
     },
   };
 
-  return [searchTool, requestTool, queueLikedTool, playPlaylistTool, queueSongsTool, recommendPlaylistsTool, recommendSongsTool];
+  const playMoodTool = {
+    name: 'netease_play_mood',
+    description:
+      'Record the current conversation mood for the autoplay feature and, only when the player is stopped, pick one suitable song and play it. '
+      + 'Never interrupts music that is playing or paused. Use when the mood of the conversation changes noticeably '
+      + '(e.g. focus, upbeat, night, melancholy, celebration).',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        mood: {
+          type: 'string',
+          enum: [...MOODS],
+          description: 'Conversation mood. calm, focus, upbeat, night, melancholy or celebration.',
+        },
+      },
+      required: ['mood'],
+    },
+    output: {
+      schema: MOOD_OUTPUT_SCHEMA,
+      render: (_args, value) => [{ type: 'text', text: formatMoodResult(value) }],
+    },
+    timeoutMs: 120_000,
+    isConcurrencySafe: () => false,
+    presentCall(args) {
+      const label = MOOD_LABELS[args?.mood] ?? String(args?.mood ?? '');
+      return {
+        card: 'generic',
+        title: `氛围：${label}`,
+        kind: 'search',
+        rawInput: args,
+      };
+    },
+    async execute(args) {
+      if (typeof autoplayController.applyMood !== 'function') {
+        throw new Error('自动播放控制器未就绪');
+      }
+      const result = await autoplayController.applyMood(args?.mood);
+      return { ...result, ok: result.ok === true };
+    },
+  };
+
+  return [
+    searchTool,
+    requestTool,
+    queueLikedTool,
+    playPlaylistTool,
+    queueSongsTool,
+    recommendPlaylistsTool,
+    recommendSongsTool,
+    playMoodTool,
+  ];
 }
 
 /* ------------------------------------------------------------------ */
@@ -1696,6 +1808,7 @@ export function apply(ctx) {
     volumeSaveTimer: null,
     volumeTarget: null,
     volumeRunning: false,
+    paused: false,
   };
   void ready.then(() => {
     player.volume = state.config.volume;
@@ -1740,9 +1853,53 @@ export function apply(ctx) {
       queueLength: queueTotal > 0 ? queueTotal : Number(raw.queueLength) || 0,
       volume: player.volume,
     };
+    if (value.status === 'playing') player.paused = false;
     player.cache = value;
     player.cacheAt = Date.now();
     return value;
+  };
+
+  const autoplay = { mood: DEFAULT_AUTOPLAY.startupMood, running: false };
+
+  const runAutoplay = async ({ mood, source } = {}) => {
+    if (mood !== undefined) autoplay.mood = normalizeMood(mood);
+    const config = await currentConfig();
+    const base = { ok: false, mood: autoplay.mood, played: null, skipped: '' };
+    if (!config.autoplay.enabled) return { ...base, skipped: 'disabled' };
+    if (autoplay.running) return { ...base, skipped: 'busy' };
+
+    autoplay.running = true;
+    try {
+      const current = await readPlayerState(true);
+      if (player.paused === true) {
+        return { ...base, skipped: 'paused' };
+      }
+      if (current.status !== 'stopped') {
+        return { ...base, skipped: current.status };
+      }
+      const song = await pickSongForMood(autoplay.mood, {
+        searchSongs: async (query) => (await officialSearchSongs(config, query, 5)).songs,
+      });
+      if (!song) return { ...base, skipped: 'no-song' };
+
+      const play = await runCli(
+        ['play', '--song', '--encrypted-id', song.encryptedId, '--original-id', String(song.originalId)],
+        { timeoutMs: 60_000 },
+      );
+      const payload = parseJsonOutput(play.stdout) ?? parseJsonOutput(play.stderr) ?? {};
+      if (play.code !== 0 || payload.success === false) {
+        console.warn('[netease-request] 自动播放失败：', payload.message || cliFailureText(play));
+        return { ...base, skipped: 'error' };
+      }
+      player.cacheAt = 0;
+      player.queueAt = 0;
+      return { ok: true, mood: autoplay.mood, played: publicSong(song), skipped: '' };
+    } catch (error) {
+      console.warn(`[netease-request] 自动播放失败（${source ?? 'unknown'}）：`, messageOf(error));
+      return { ...base, skipped: 'error' };
+    } finally {
+      autoplay.running = false;
+    }
   };
 
   const persistVolume = async (volume) => {
@@ -1870,6 +2027,10 @@ export function apply(ctx) {
       throw new HttpError(409, payload.message || withModeHint(cliFailureText(result)));
     }
     if (action === 'volume') await persistVolume(clampVolume(body?.value));
+    if (action === 'pause') player.paused = true;
+    else if (action === 'resume' || action === 'next' || action === 'prev' || action === 'stop' || action === 'queueClear') {
+      player.paused = false;
+    }
 
     await new Promise((resolve) => setTimeout(resolve, 250));
     player.cacheAt = 0;
@@ -1984,7 +2145,50 @@ export function apply(ctx) {
   }, 'netease-request: settings HTTP API');
 
   ctx.effect(() => {
-    const disposers = createToolDefinitions(currentConfig).map((definition) => ctx.tools.register(definition));
+    let active = true;
+    let pollTimer = null;
+    const schedulePoll = async () => {
+      const config = await currentConfig();
+      if (!active) return;
+      const minutes = Math.max(1, Number(config.autoplay.pollMinutes) || 5);
+      pollTimer = setTimeout(async () => {
+        if (!active) return;
+        await runAutoplay({ source: 'poll' });
+        if (active) void schedulePoll();
+      }, minutes * 60_000);
+    };
+
+    const startupTimer = setTimeout(() => {
+      if (!active) return;
+      void currentConfig().then((config) => {
+        if (!active || !config.autoplay.enabled || !config.autoplay.onStartup) return;
+        autoplay.mood = normalizeMood(config.autoplay.startupMood);
+        void runAutoplay({ source: 'startup', mood: config.autoplay.startupMood });
+      });
+    }, 5_000);
+
+    void schedulePoll();
+    return () => {
+      active = false;
+      clearTimeout(startupTimer);
+      if (pollTimer !== null) clearTimeout(pollTimer);
+    };
+  }, 'netease-request: autoplay timers');
+
+  ctx.effect(() => ctx.systemPrompt.section({
+    name: 'tool:netease_play_mood',
+    order: 100,
+    text: () => {
+      const config = state.config;
+      if (!config?.autoplay?.enabled || config.autoplay.followConversation !== true) return '';
+      return '当对话氛围明显变化时，可以调用 netease_play_mood 记录氛围；当前正在播放或暂停时它只会记录，不会切歌；只有当前没有播放时才会挑选一首播放。';
+    },
+  }), 'netease-request: autoplay prompt');
+
+  ctx.effect(() => {
+    const disposers = createToolDefinitions(currentConfig, {
+      applyMood: (mood) => runAutoplay({ mood, source: 'tool' }),
+    }).map((definition) => ctx.tools.register(definition));
     return () => {
       for (const dispose of disposers) dispose();
     };
@@ -1992,4 +2196,4 @@ export function apply(ctx) {
 }
 
 export const name = 'netease-request';
-export const inject = ['tools', 'webServer'];
+export const inject = ['tools', 'webServer', 'systemPrompt'];

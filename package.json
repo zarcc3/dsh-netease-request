@@ -2,7 +2,7 @@
   "name": "@local/netease-request",
   "version": "1.0.0",
   "private": true,
-  "description": "Personal NetEase Cloud Music song requests: a settings page for the API endpoint and agent tools that search songs and resolve playable links.",
+  "description": "Personal NetEase Cloud Music requests built on the official open-platform CLI: agent tools, sidebar player, queue and mood-based autoplay.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -14,6 +14,7 @@
   "files": [
     "index.js",
     "client.js",
+    "mood.js",
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",

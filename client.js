@@ -58,6 +58,19 @@ window.__ModuleLoader__.load({
       statusOk: '官方链路就绪',
       statusWarn: '官方链路未就绪',
       statusFailed: '状态检查失败',
+      autoplayTitle: '自动播放',
+      autoplayEnable: '启用自动播放',
+      autoplayEnableHint: '只在当前没有播放时添加一首歌，不会打断正在播放或暂停的音乐。',
+      autoplayStartup: 'DSH 启动时播放一首舒缓音乐',
+      autoplayPoll: '轮询间隔（分钟）',
+      autoplayMood: '启动风格',
+      autoplayFollow: '对话氛围变化时允许 Agent 记录并选择音乐',
+      moodCalm: '舒缓',
+      moodFocus: '专注',
+      moodUpbeat: '轻快',
+      moodNight: '夜晚',
+      moodMelancholy: '伤感',
+      moodCelebration: '庆祝',
       configPath: '配置文件',
       playerUnknown: '网易云音乐',
       playerQueue: '队列',
@@ -129,6 +142,19 @@ window.__ModuleLoader__.load({
       statusOk: 'official path ready',
       statusWarn: 'official path not ready',
       statusFailed: 'Status check failed',
+      autoplayTitle: 'Autoplay',
+      autoplayEnable: 'Enable autoplay',
+      autoplayEnableHint: 'Only adds one song when nothing is playing; never interrupts playing or paused music.',
+      autoplayStartup: 'Play calm music when DSH starts',
+      autoplayPoll: 'Poll interval (minutes)',
+      autoplayMood: 'Startup mood',
+      autoplayFollow: 'Let the agent record the mood and choose music when the conversation changes',
+      moodCalm: 'Calm',
+      moodFocus: 'Focus',
+      moodUpbeat: 'Upbeat',
+      moodNight: 'Night',
+      moodMelancholy: 'Melancholy',
+      moodCelebration: 'Celebration',
       configPath: 'Config file',
       playerUnknown: 'NetEase Music',
       playerQueue: 'Queue',
@@ -159,6 +185,15 @@ window.__ModuleLoader__.load({
       unknown: 'unknown',
     };
 
+    const MOOD_OPTIONS = [
+      ['calm', 'moodCalm'],
+      ['focus', 'moodFocus'],
+      ['upbeat', 'moodUpbeat'],
+      ['night', 'moodNight'],
+      ['melancholy', 'moodMelancholy'],
+      ['celebration', 'moodCelebration'],
+    ];
+
     const CSS = [
       '.nr-page{display:flex;flex-direction:column;gap:14px;max-width:720px;color:var(--dsw-alias-label-primary);font-size:13px;line-height:20px}',
       '.nr-title{margin:0;font-size:16px;font-weight:600;line-height:24px}',
@@ -171,6 +206,8 @@ window.__ModuleLoader__.load({
       '.nr-input:focus,.nr-select:focus{border-color:var(--dsw-alias-brand-primary)}',
       '.nr-input:disabled,.nr-select:disabled{opacity:.6}',
       '.nr-hint{margin:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}',
+      '.nr-check{display:flex;align-items:center;gap:8px;font-size:12px;line-height:18px;color:var(--dsw-alias-label-primary)}',
+      '.nr-check input{width:14px;height:14px;margin:0;accent-color:var(--dsw-alias-brand-primary);cursor:pointer}',
       '.nr-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px}',
       '.nr-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
       '.nr-btn{border:1px solid var(--dsw-alias-border-l2);background:transparent;color:var(--dsw-alias-label-primary);border-radius:8px;padding:4px 14px;font:inherit;font-size:12px;line-height:20px;cursor:pointer;white-space:nowrap}',
@@ -266,6 +303,7 @@ window.__ModuleLoader__.load({
     function draftFromConfig(config) {
       const source = asRecord(config);
       const official = asRecord(source.official);
+      const autoplay = asRecord(source.autoplay);
       return {
         searchLimit: String(source.searchLimit ?? 10),
         official: {
@@ -273,6 +311,13 @@ window.__ModuleLoader__.load({
           privateKey: '',
           player: String(official.player ?? 'mpv'),
           privateKeySet: official.privateKeySet === true,
+        },
+        autoplay: {
+          enabled: autoplay.enabled === true,
+          onStartup: autoplay.onStartup !== false,
+          pollMinutes: String(autoplay.pollMinutes ?? 5),
+          startupMood: String(autoplay.startupMood ?? 'calm'),
+          followConversation: autoplay.followConversation !== false,
         },
       };
     }
@@ -1037,12 +1082,27 @@ window.__ModuleLoader__.load({
           setNotice(null);
         };
 
+        const updateAutoplay = (key) => (event) => {
+          const value = event.target.type === 'checkbox' ? event.target.checked : event.target.value;
+          setDraft((previous) => (previous === null
+            ? previous
+            : { ...previous, autoplay: { ...previous.autoplay, [key]: value } }));
+          setNotice(null);
+        };
+
         const payload = () => ({
           searchLimit: Number(draft?.searchLimit ?? 10),
           official: {
             appId: draft?.official.appId ?? '',
             privateKey: draft?.official.privateKey ?? '',
             player: draft?.official.player ?? 'mpv',
+          },
+          autoplay: {
+            enabled: draft?.autoplay.enabled === true,
+            onStartup: draft?.autoplay.onStartup !== false,
+            pollMinutes: Number(draft?.autoplay.pollMinutes ?? 5),
+            startupMood: draft?.autoplay.startupMood ?? 'calm',
+            followConversation: draft?.autoplay.followConversation !== false,
           },
         });
 
@@ -1264,6 +1324,58 @@ window.__ModuleLoader__.load({
               : null,
             h('p', { className: 'nr-hint' }, t('noCli')),
             h('p', { className: 'nr-hint' }, t('noMpv')),
+          ),
+
+          h('section', { className: 'nr-card' },
+            h('h3', { className: 'nr-cardTitle' }, t('autoplayTitle')),
+            h('label', { className: 'nr-check' },
+              h('input', {
+                type: 'checkbox',
+                checked: draft.autoplay.enabled,
+                onChange: updateAutoplay('enabled'),
+              }),
+              h('span', null, t('autoplayEnable')),
+            ),
+            h('p', { className: 'nr-hint' }, t('autoplayEnableHint')),
+            draft.autoplay.enabled ? h('div', { className: 'nr-field' },
+              h('div', { className: 'nr-grid' },
+                field(
+                  t('autoplayPoll'),
+                  h('input', {
+                    className: 'nr-input',
+                    type: 'number',
+                    min: 1,
+                    max: 60,
+                    value: draft.autoplay.pollMinutes,
+                    onChange: updateAutoplay('pollMinutes'),
+                  }),
+                ),
+                field(
+                  t('autoplayMood'),
+                  h('select', {
+                    className: 'nr-select',
+                    value: draft.autoplay.startupMood,
+                    onChange: updateAutoplay('startupMood'),
+                  }, MOOD_OPTIONS.map(([value, key]) => h('option', { key: value, value }, t(key)))),
+                ),
+              ),
+              h('label', { className: 'nr-check' },
+                h('input', {
+                  type: 'checkbox',
+                  checked: draft.autoplay.onStartup,
+                  onChange: updateAutoplay('onStartup'),
+                }),
+                h('span', null, t('autoplayStartup')),
+              ),
+              h('label', { className: 'nr-check' },
+                h('input', {
+                  type: 'checkbox',
+                  checked: draft.autoplay.followConversation,
+                  onChange: updateAutoplay('followConversation'),
+                }),
+                h('span', null, t('autoplayFollow')),
+              ),
+            ) : null,
           ),
 
           h('div', { className: 'nr-actions' },
