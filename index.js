@@ -921,6 +921,99 @@ export async function recommendPlaylists(options = {}) {
   };
 }
 
+async function clearPlayerQueue() {
+  const clear = await runCli(['queue', 'clear'], { timeoutMs: 20_000 });
+  const payload = parseJsonOutput(clear.stdout) ?? parseJsonOutput(clear.stderr) ?? {};
+  if (clear.code !== 0 || payload.success === false) {
+    throw new Error(withModeHint(payload.message || cliFailureText(clear)));
+  }
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+}
+
+async function fetchRecommendedSongs(kind, count) {
+  const limit = Math.min(Math.max(Math.round(Number(count) || 10), 1), 30);
+  let result;
+  if (kind === 'daily') {
+    result = await runCli(
+      ['--output', 'json', 'recommend', 'daily', '--limit', String(limit), '--userInput', '推荐歌曲'],
+      { timeoutMs: 30_000 },
+    );
+  } else {
+    const playlists = await listPlaylists();
+    const liked = playlists.find((playlist) => playlist.name.includes('喜欢的音乐'))
+      ?? playlists.find((playlist) => playlist.kind === 'created' && playlist.name.includes('喜欢'));
+    if (!liked) throw new Error('没有找到「喜欢的音乐」歌单。');
+    result = await runCli(
+      [
+        '--output', 'json', 'recommend', 'heartbeat',
+        '--playlistId', liked.encryptedId,
+        '--type', 'fromPlayAll',
+        '--count', String(limit),
+        '--userInput', '心动模式推荐',
+      ],
+      { timeoutMs: 30_000 },
+    );
+  }
+  if (result.code !== 0) throw new Error(withModeHint(cliFailureText(result)));
+  const payload = parseJsonOutput(result.stdout) ?? parseJsonOutput(result.stderr) ?? {};
+  const data = Array.isArray(payload?.data) ? payload.data : [];
+  const seen = new Set();
+  const songs = [];
+  for (const item of data) {
+    const song = normalizeOfficialSong(item);
+    if (!song || song.playable === false || song.encryptedId === '') continue;
+    const key = song.encryptedId;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    songs.push(song);
+  }
+
+  if (kind !== 'daily' && songs.length < limit) {
+    try {
+      const fallback = await runCli(
+        ['--output', 'json', 'recommend', 'daily', '--limit', String(Math.min(Math.max(limit * 4, 20), 40)), '--userInput', '推荐歌曲'],
+        { timeoutMs: 30_000 },
+      );
+      if (fallback.code === 0) {
+        const fallbackPayload = parseJsonOutput(fallback.stdout) ?? parseJsonOutput(fallback.stderr) ?? {};
+        const fallbackData = Array.isArray(fallbackPayload?.data) ? fallbackPayload.data : [];
+        for (const item of fallbackData) {
+          if (songs.length >= limit) break;
+          const song = normalizeOfficialSong(item);
+          if (!song || song.playable === false || song.encryptedId === '') continue;
+          if (seen.has(song.encryptedId)) continue;
+          seen.add(song.encryptedId);
+          songs.push(song);
+        }
+      }
+    } catch {
+      // Keep the primary recommendations when the fallback fails.
+    }
+  }
+
+  return songs.slice(0, limit);
+}
+
+export async function recommendSongs(options = {}) {
+  const kind = options.kind === 'daily' ? 'daily' : 'heartbeat';
+  const requested = Math.min(Math.max(Math.round(Number(options.count) || 10), 1), 30);
+  const songs = await fetchRecommendedSongs(kind, requested);
+  if (songs.length === 0) throw new Error('没有获取到可播放的推荐歌曲。');
+
+  let started = false;
+  if (options.play === true) {
+    if (options.replace === true) await clearPlayerQueue();
+    const enqueued = await enqueuePickedSongs(songs);
+    started = enqueued.started;
+  }
+  return {
+    kind,
+    playing: options.play === true,
+    started,
+    songs: songs.map(publicSong),
+  };
+}
+
 function publicSong(song) {
   return {
     id: song.id,
@@ -1156,6 +1249,43 @@ function formatRecommendPlaylists(value) {
     if (description !== '') lines.push(`   ${description}`);
   });
   lines.push('', '要播放第几个，直接说序号即可。');
+  return lines.join('\n');
+}
+
+const RECOMMEND_SONGS_OUTPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean' },
+    kind: { type: 'string' },
+    playing: { type: 'boolean' },
+    started: { type: 'boolean' },
+    songs: { type: 'array', items: SONG_SCHEMA },
+  },
+  required: ['ok', 'kind', 'playing', 'started', 'songs'],
+};
+
+function formatRecommendSongs(value) {
+  const label = (song) => {
+    const artist = song.artists.length > 0 ? ` — ${song.artists.join('/')}` : '';
+    return `${song.name}${artist}`;
+  };
+  const lines = [];
+  if (value.playing === true) {
+    if (value.started === true && value.songs.length > 0) {
+      lines.push(`当前没有播放，已开始播放推荐：${label(value.songs[0])}`);
+      const rest = value.songs.slice(1);
+      if (rest.length > 0) {
+        lines.push(`并把剩余 ${rest.length} 首加入队列：`);
+        rest.forEach((song, index) => lines.push(`${index + 1}. ${label(song)}`));
+      }
+    } else {
+      lines.push(`已把 ${value.songs.length} 首推荐加入队列：`);
+      value.songs.forEach((song, index) => lines.push(`${index + 1}. ${label(song)}`));
+    }
+    return lines.join('\n');
+  }
+  lines.push(`为你推荐（${value.kind === 'daily' ? '每日推荐' : '心动模式'}）：`);
+  value.songs.forEach((song, index) => lines.push(`${index + 1}. ${label(song)}`));
   return lines.join('\n');
 }
 
@@ -1417,7 +1547,64 @@ function createToolDefinitions(currentConfig) {
     },
   };
 
-  return [searchTool, requestTool, queueLikedTool, playPlaylistTool, queueSongsTool, recommendPlaylistsTool];
+  const recommendSongsTool = {
+    name: 'netease_recommend_songs',
+    description:
+      'Get personalized song recommendations from the official ncm-cli: kind "heartbeat" (心动模式, based on the user\'s liked playlist) '
+      + 'or "daily" (每日推荐). Set play=true to start or queue them immediately, and replace=true to clear the current queue first. '
+      + 'Use when the user asks for song recommendations (推荐几首歌听听).',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        kind: {
+          type: 'string',
+          enum: ['heartbeat', 'daily'],
+          description: 'Recommendation source: heartbeat (default) or daily.',
+        },
+        count: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 30,
+          description: 'How many recommendations to return. Defaults to 10.',
+        },
+        play: {
+          type: 'boolean',
+          description: 'Start or queue the recommended songs immediately. Defaults to false (list only).',
+        },
+        replace: {
+          type: 'boolean',
+          description: 'Clear the current queue before playing recommendations, used with play=true.',
+        },
+      },
+    },
+    output: {
+      schema: RECOMMEND_SONGS_OUTPUT_SCHEMA,
+      render: (_args, value) => [{ type: 'text', text: formatRecommendSongs(value) }],
+    },
+    timeoutMs: 180_000,
+    isConcurrencySafe: () => false,
+    presentCall(args) {
+      const kind = args?.kind === 'daily' ? '每日推荐' : '心动模式';
+      return {
+        card: 'generic',
+        title: `推荐歌曲：${kind}`,
+        kind: 'search',
+        rawInput: args,
+      };
+    },
+    async execute(args) {
+      const result = await recommendSongs({
+        kind: args?.kind,
+        count: args?.count,
+        play: args?.play === true,
+        replace: args?.replace === true,
+      });
+      return { ok: true, ...result };
+    },
+  };
+
+  return [searchTool, requestTool, queueLikedTool, playPlaylistTool, queueSongsTool, recommendPlaylistsTool, recommendSongsTool];
 }
 
 /* ------------------------------------------------------------------ */
