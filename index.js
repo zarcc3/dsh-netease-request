@@ -862,6 +862,57 @@ export async function queueSongsByQueries(queries) {
   return { requested: list.length, started, added, failed };
 }
 
+export async function radarPlaylists() {
+  const result = await runCli(
+    ['--output', 'json', 'playlist', 'radar', '--userInput', '推荐一些歌单'],
+    { timeoutMs: 30_000 },
+  );
+  if (result.code !== 0) throw new Error(withModeHint(cliFailureText(result)));
+  const payload = parseJsonOutput(result.stdout) ?? parseJsonOutput(result.stderr) ?? {};
+  const data = Array.isArray(payload?.data) ? payload.data : [];
+  return data
+    .filter((item) => item && typeof item === 'object' && item.id)
+    .map((item, position) => ({
+      index: position + 1,
+      name: String(item.name ?? ''),
+      creator: String(item.creatorNickName ?? ''),
+      description: String(item.describe ?? ''),
+      trackCount: Number(item.trackCount) || 0,
+      pageUrl: item.originalId ? `https://music.163.com/#/playlist?id=${item.originalId}` : '',
+      encryptedId: String(item.id),
+      originalId: String(item.originalId ?? ''),
+    }));
+}
+
+export async function recommendPlaylists(options = {}) {
+  const playlists = await radarPlaylists();
+  if (playlists.length === 0) throw new Error('没有获取到推荐歌单。');
+
+  let playing = '';
+  if (options.play === true) {
+    const index = Math.min(Math.max(Math.round(Number(options.index) || 1), 1), playlists.length);
+    const playlist = playlists[index - 1];
+    const result = await runCli(
+      [
+        'play', '--playlist',
+        '--encrypted-id', playlist.encryptedId,
+        '--original-id', playlist.originalId !== '' ? playlist.originalId : playlist.encryptedId,
+      ],
+      { timeoutMs: 60_000 },
+    );
+    const payload = parseJsonOutput(result.stdout) ?? parseJsonOutput(result.stderr) ?? {};
+    if (result.code !== 0 || payload.success === false) {
+      throw new Error(withModeHint(payload.message || cliFailureText(result)));
+    }
+    playing = playlist.name;
+  }
+
+  return {
+    playlists: playlists.map(({ encryptedId, originalId, ...rest }) => rest),
+    playing,
+  };
+}
+
 function publicSong(song) {
   return {
     id: song.id,
@@ -1058,6 +1109,46 @@ function formatQueueSongs(value) {
     lines.push(`未找到：${value.failed.map((item) => `${item.query}（${item.message}）`).join('；')}`);
   }
   return lines.join('\n') || '没有加入歌曲。';
+}
+
+const RECOMMEND_PLAYLISTS_OUTPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean' },
+    playing: { type: 'string' },
+    playlists: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          index: { type: 'integer' },
+          name: { type: 'string' },
+          creator: { type: 'string' },
+          description: { type: 'string' },
+          trackCount: { type: 'integer' },
+          pageUrl: { type: 'string' },
+        },
+        required: ['index', 'name', 'creator', 'description', 'trackCount', 'pageUrl'],
+      },
+    },
+  },
+  required: ['ok', 'playing', 'playlists'],
+};
+
+function formatRecommendPlaylists(value) {
+  const lines = [];
+  if (value.playing !== '') {
+    lines.push(`开始播放推荐歌单「${value.playing}」。`, '');
+  }
+  lines.push('个性化推荐歌单：');
+  value.playlists.forEach((playlist) => {
+    const creator = playlist.creator !== '' ? ` — ${playlist.creator}` : '';
+    lines.push(`${playlist.index}. ${playlist.name}（${playlist.trackCount} 首）${creator}`);
+    const description = playlist.description.replace(/\s+/g, ' ').slice(0, 80);
+    if (description !== '') lines.push(`   ${description}`);
+  });
+  lines.push('', '要播放第几个，直接说序号即可。');
+  return lines.join('\n');
 }
 
 function createToolDefinitions(currentConfig) {
@@ -1270,7 +1361,50 @@ function createToolDefinitions(currentConfig) {
     },
   };
 
-  return [searchTool, requestTool, queueLikedTool, playPlaylistTool, queueSongsTool];
+  const recommendPlaylistsTool = {
+    name: 'netease_recommend_playlists',
+    description:
+      'List the user\'s personalized NetEase radar playlists (推荐歌单) through the official ncm-cli. '
+      + 'Set play=true with an optional 1-based index to start playing one immediately. '
+      + 'Use when the user asks for playlist recommendations or wants to play a recommended playlist.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        play: {
+          type: 'boolean',
+          description: 'Start playing one of the recommended playlists. Defaults to false (list only).',
+        },
+        index: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 20,
+          description: '1-based playlist index used when play=true. Defaults to 1.',
+        },
+      },
+    },
+    output: {
+      schema: RECOMMEND_PLAYLISTS_OUTPUT_SCHEMA,
+      render: (_args, value) => [{ type: 'text', text: formatRecommendPlaylists(value) }],
+    },
+    timeoutMs: 120_000,
+    isConcurrencySafe: () => false,
+    presentCall(args) {
+      const playing = args?.play === true ? `播放第 ${args?.index ?? 1} 个` : '获取推荐歌单';
+      return {
+        card: 'generic',
+        title: playing,
+        kind: 'search',
+        rawInput: args,
+      };
+    },
+    async execute(args) {
+      const result = await recommendPlaylists({ play: args?.play === true, index: args?.index });
+      return { ok: true, ...result };
+    },
+  };
+
+  return [searchTool, requestTool, queueLikedTool, playPlaylistTool, queueSongsTool, recommendPlaylistsTool];
 }
 
 /* ------------------------------------------------------------------ */

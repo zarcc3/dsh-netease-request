@@ -12,6 +12,7 @@
   - `netease_queue_liked`：从「喜欢的音乐」随机加 N 首到队列；没有播放时会先开始播放第一首
   - `netease_queue_songs`：按一组「歌名 + 歌手」查询，匹配后批量加入队列；没有播放时自动开始
   - `netease_play_playlist`：按歌单名播放创建或收藏的歌单
+  - `netease_recommend_playlists`：获取个性化雷达推荐歌单，可按序号直接播放
 - **侧边栏播放器**
   - 常驻音符按钮，点击展开播放面板
   - 当前歌曲、进度、播放/暂停、下一首
