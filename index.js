@@ -775,6 +775,93 @@ export async function playPlaylistByName(name) {
   return { name: playlist.name, kind: playlist.kind, trackCount: playlist.trackCount };
 }
 
+function searchSongSummary(song) {
+  return {
+    id: Number(song.id) || 0,
+    name: song.name,
+    artists: song.artists,
+    album: song.album,
+  };
+}
+
+async function enqueuePickedSongs(picked) {
+  let active = false;
+  try {
+    const stateResult = await runCli(['state'], { timeoutMs: 15_000 });
+    const statePayload = parseJsonOutput(stateResult.stdout) ?? parseJsonOutput(stateResult.stderr) ?? {};
+    active = statePayload?.state?.status === 'playing' || statePayload?.state?.status === 'paused';
+  } catch {
+    active = false;
+  }
+
+  const added = [];
+  let started = false;
+  let rest = picked;
+  if (!active && picked.length > 0) {
+    const first = picked[0];
+    const play = await runCli(
+      ['play', '--song', '--encrypted-id', first.encryptedId, '--original-id', String(first.originalId)],
+      { timeoutMs: 60_000 },
+    );
+    const playPayload = parseJsonOutput(play.stdout) ?? parseJsonOutput(play.stderr) ?? {};
+    if (play.code !== 0 || playPayload.success === false) {
+      throw new Error(withModeHint(playPayload.message || cliFailureText(play)));
+    }
+    started = true;
+    added.push(searchSongSummary(first));
+    rest = picked.slice(1);
+    if (rest.length > 0) await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+
+  for (const song of rest) {
+    const result = await runCli(
+      ['queue', 'add', '--encrypted-id', song.encryptedId, '--original-id', String(song.originalId)],
+      { timeoutMs: 20_000 },
+    );
+    const payload = parseJsonOutput(result.stdout) ?? parseJsonOutput(result.stderr) ?? {};
+    if (result.code !== 0 || payload.success === false) {
+      throw new Error(withModeHint(payload.message || cliFailureText(result)));
+    }
+    added.push(searchSongSummary(song));
+  }
+  return { started, added };
+}
+
+export async function queueSongsByQueries(queries) {
+  const list = (Array.isArray(queries) ? queries : [])
+    .filter((query) => typeof query === 'string' && query.trim() !== '')
+    .slice(0, 10);
+  if (list.length === 0) throw new Error('请提供要加入队列的歌曲');
+
+  const picked = [];
+  const failed = [];
+  for (const query of list) {
+    try {
+      const found = await officialSearchSongs({ searchLimit: 3 }, query, 3);
+      const song = found.songs.find((candidate) => candidate.playable !== false) ?? found.songs[0];
+      if (!song || !song.encryptedId) throw new Error('没有可播放结果');
+      picked.push(song);
+    } catch (error) {
+      failed.push({ query, message: messageOf(error) });
+    }
+  }
+  if (picked.length === 0) {
+    throw new Error(`没有找到可加入队列的歌曲：${failed.map((item) => `${item.query}（${item.message}）`).join('；')}`);
+  }
+
+  const seen = new Set();
+  const unique = [];
+  for (const song of picked) {
+    const key = song.encryptedId || `${song.originalId}:${song.name}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      unique.push(song);
+    }
+  }
+  const { started, added } = await enqueuePickedSongs(unique);
+  return { requested: list.length, started, added, failed };
+}
+
 function publicSong(song) {
   return {
     id: song.id,
@@ -929,6 +1016,48 @@ function formatQueueLiked(value) {
   }
   const lines = value.added.map((song, index) => `${index + 1}. ${label(song)}`);
   return [`已从「${value.playlist}」加入 ${value.added.length} 首到队列：`, ...lines].join('\n');
+}
+
+const QUEUE_SONGS_OUTPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean' },
+    requested: { type: 'integer' },
+    started: { type: 'boolean' },
+    added: { type: 'array', items: PLAYLIST_SONG_SCHEMA },
+    failed: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          query: { type: 'string' },
+          message: { type: 'string' },
+        },
+        required: ['query', 'message'],
+      },
+    },
+  },
+  required: ['ok', 'requested', 'started', 'added', 'failed'],
+};
+
+function formatQueueSongs(value) {
+  const label = (song) => {
+    const artist = song.artists.length > 0 ? ` — ${song.artists.join('/')}` : '';
+    return `${song.name}${artist}`;
+  };
+  const lines = [];
+  const rest = value.started === true ? value.added.slice(1) : value.added;
+  if (value.started === true && value.added.length > 0) {
+    lines.push(`当前没有播放，已开始播放：${label(value.added[0])}`);
+  }
+  if (rest.length > 0) {
+    lines.push(`${value.started === true ? '并把剩余' : '已加入队列'} ${rest.length} 首${value.started === true ? '加入队列' : ''}：`);
+    rest.forEach((song, index) => lines.push(`${index + 1}. ${label(song)}`));
+  }
+  if (Array.isArray(value.failed) && value.failed.length > 0) {
+    lines.push(`未找到：${value.failed.map((item) => `${item.query}（${item.message}）`).join('；')}`);
+  }
+  return lines.join('\n') || '没有加入歌曲。';
 }
 
 function createToolDefinitions(currentConfig) {
@@ -1101,7 +1230,47 @@ function createToolDefinitions(currentConfig) {
     },
   };
 
-  return [searchTool, requestTool, queueLikedTool, playPlaylistTool];
+  const queueSongsTool = {
+    name: 'netease_queue_songs',
+    description:
+      'Search one or more song queries through the official ncm-cli and add the best playable match of each to the playback queue. '
+      + 'Starts playback automatically when idle. Use when the user asks to play or queue a specific set of songs (e.g. 就放这几首).',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        queries: {
+          type: 'array',
+          items: { type: 'string' },
+          minItems: 1,
+          maxItems: 10,
+          description: 'One query per song, ideally title plus artist.',
+        },
+      },
+      required: ['queries'],
+    },
+    output: {
+      schema: QUEUE_SONGS_OUTPUT_SCHEMA,
+      render: (_args, value) => [{ type: 'text', text: formatQueueSongs(value) }],
+    },
+    timeoutMs: 180_000,
+    isConcurrencySafe: () => false,
+    presentCall(args) {
+      const count = Array.isArray(args?.queries) ? args.queries.length : 0;
+      return {
+        card: 'generic',
+        title: `加入队列：${count} 首`,
+        kind: 'search',
+        rawInput: args,
+      };
+    },
+    async execute(args) {
+      const result = await queueSongsByQueries(args?.queries);
+      return { ok: true, ...result };
+    },
+  };
+
+  return [searchTool, requestTool, queueLikedTool, playPlaylistTool, queueSongsTool];
 }
 
 /* ------------------------------------------------------------------ */
