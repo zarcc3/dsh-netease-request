@@ -2104,11 +2104,12 @@ export function apply(ctx) {
       throw new Error(withModeHint(cliFailureText(result)));
     }
     const raw = payload.state ?? {};
-    const active = raw.status === 'playing' || raw.status === 'paused';
+    const paused = player.paused === true && raw.status !== 'playing';
+    const active = raw.status === 'playing' || raw.status === 'paused' || paused;
     const queueTotal = active ? await readQueueTotal() : 0;
     const value = {
       ok: payload.success !== false,
-      status: typeof raw.status === 'string' ? raw.status : 'stopped',
+      status: paused ? 'paused' : (typeof raw.status === 'string' ? raw.status : 'stopped'),
       title: typeof raw.title === 'string' ? raw.title : '',
       position: Number(raw.position) || 0,
       duration: Number(raw.duration) || 0,
