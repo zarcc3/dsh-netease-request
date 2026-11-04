@@ -93,6 +93,9 @@ window.__ModuleLoader__.load({
       playerNext: '下一首',
       playerPlay: '播放',
       playerPause: '暂停',
+      playerLike: '喜欢',
+      playerLiked: '已添加到喜欢的音乐',
+      playerLikedAlready: '已经在喜欢的音乐中',
       playerError: '播放控制失败',
       playerIdle: '未在播放',
       playerIdleHint: '说「放首歌」即可开始',
@@ -191,6 +194,9 @@ window.__ModuleLoader__.load({
       playerNext: 'Next',
       playerPlay: 'Play',
       playerPause: 'Pause',
+      playerLike: 'Like',
+      playerLiked: 'Added to liked songs',
+      playerLikedAlready: 'Already in liked songs',
       playerError: 'Playback control failed',
       playerIdle: 'Nothing playing',
       playerIdleHint: 'Ask to play a song to start',
@@ -328,6 +334,7 @@ window.__ModuleLoader__.load({
       '.nsp-vol{display:flex;align-items:center;gap:6px;color:var(--dsw-alias-label-secondary)}',
       '.nsp-vol input{flex:1;min-width:0;accent-color:var(--dsw-alias-brand-primary);cursor:pointer}',
       '.nsp-error{padding:4px 8px;border-radius:8px;border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:16px}',
+      '.nsp-notice{padding:4px 8px;border-radius:8px;border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary);font-size:11px;line-height:16px}',
       '.nsp-hint{font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary)}',
       '.nsp-queuePanel{display:flex;flex-direction:column;gap:1px;max-height:154px;overflow-y:auto;padding-top:4px;border-top:1px solid var(--dsw-alias-border-l1)}',
       '.nsp-queueRow{display:flex;align-items:center;gap:6px;min-width:0;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary)}',
@@ -385,6 +392,7 @@ window.__ModuleLoader__.load({
         next: ['M12 3h2v10h-2z', 'M2 3v10l8-5z'],
         play: ['M4 2.5v11l9-5.5z'],
         pause: ['M4 3h3v10H4z', 'M9 3h3v10H9z'],
+        heart: ['M8 13.7S2.3 10.2 2.3 6.2A3.2 3.2 0 018 4.2a3.2 3.2 0 015.7 2c0 4-5.7 7.5-5.7 7.5z'],
       };
       const list = paths[shape] ?? paths.play;
       return h('svg', { viewBox: '0 0 16 16', width: 14, height: 14, 'aria-hidden': true, focusable: false },
@@ -792,6 +800,7 @@ window.__ModuleLoader__.load({
         const [volume, setVolume] = useState(50);
         const [busy, setBusy] = useState(false);
         const [error, setError] = useState('');
+        const [notice, setNotice] = useState('');
         const [open, setOpen] = useState(false);
         const [anchor, setAnchor] = useState(null);
         const [queueOpen, setQueueOpen] = useState(false);
@@ -840,6 +849,7 @@ window.__ModuleLoader__.load({
           if (busy) return;
           setBusy(true);
           setError('');
+          setNotice('');
           try {
             const response = await fetch(`${API}/player/control`, {
               method: 'POST',
@@ -853,6 +863,10 @@ window.__ModuleLoader__.load({
             if (data.state) {
               setPlayer(data.state);
               if (typeof data.state.volume === 'number') setVolume(data.state.volume);
+            }
+            if (action === 'like') {
+              setNotice(data?.alreadyLiked === true ? t('playerLikedAlready') : t('playerLiked'));
+              window.setTimeout(() => setNotice(''), 3000);
             }
           } catch (controlError) {
             setError(`${t('playerError')}：${controlError instanceof Error ? controlError.message : String(controlError)}`);
@@ -990,6 +1004,10 @@ window.__ModuleLoader__.load({
                 onClick: () => void control('next'),
               }, h(PlayerIcon, { kind: 'next' })),
               h('button', {
+                className: 'nsp-btn', type: 'button', title: t('playerLike'), disabled: !active || busy,
+                onClick: () => void control('like'),
+              }, h(PlayerIcon, { kind: 'heart' })),
+              h('button', {
                 className: 'nsp-queue',
                 type: 'button',
                 title: queueOpen ? t('playerQueueHide') : t('playerQueueView'),
@@ -1034,6 +1052,7 @@ window.__ModuleLoader__.load({
                     )),
             ) : null,
             error ? h('div', { className: 'nsp-error' }, error) : null,
+            notice ? h('div', { className: 'nsp-notice' }, notice) : null,
           )
           : null;
 
