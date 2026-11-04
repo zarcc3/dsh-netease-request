@@ -95,9 +95,6 @@ window.__ModuleLoader__.load({
       playerPause: '暂停',
       playerLike: '喜欢',
       playerUnlike: '取消喜欢',
-      playerLiked: '已添加到喜欢的音乐',
-      playerLikedAlready: '已经在喜欢的音乐中',
-      playerUnliked: '已取消喜欢',
       playerError: '播放控制失败',
       playerIdle: '未在播放',
       playerIdleHint: '说「放首歌」即可开始',
@@ -198,9 +195,6 @@ window.__ModuleLoader__.load({
       playerPause: 'Pause',
       playerLike: 'Like',
       playerUnlike: 'Unlike',
-      playerLiked: 'Added to liked songs',
-      playerLikedAlready: 'Already in liked songs',
-      playerUnliked: 'Removed from liked songs',
       playerError: 'Playback control failed',
       playerIdle: 'Nothing playing',
       playerIdleHint: 'Ask to play a song to start',
@@ -338,7 +332,6 @@ window.__ModuleLoader__.load({
       '.nsp-vol{display:flex;align-items:center;gap:6px;color:var(--dsw-alias-label-secondary)}',
       '.nsp-vol input{flex:1;min-width:0;accent-color:var(--dsw-alias-brand-primary);cursor:pointer}',
       '.nsp-error{padding:4px 8px;border-radius:8px;border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-state-error-primary);font-size:11px;line-height:16px}',
-      '.nsp-notice{padding:4px 8px;border-radius:8px;border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary);font-size:11px;line-height:16px}',
       '.nsp-hint{font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary)}',
       '.nsp-queuePanel{display:flex;flex-direction:column;gap:1px;max-height:154px;overflow-y:auto;padding-top:4px;border-top:1px solid var(--dsw-alias-border-l1)}',
       '.nsp-queueRow{display:flex;align-items:center;gap:6px;min-width:0;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary)}',
@@ -816,7 +809,6 @@ window.__ModuleLoader__.load({
         const [volume, setVolume] = useState(50);
         const [busy, setBusy] = useState(false);
         const [error, setError] = useState('');
-        const [notice, setNotice] = useState('');
         const [liked, setLiked] = useState(false);
         const [likedLoading, setLikedLoading] = useState(false);
         const [open, setOpen] = useState(false);
@@ -887,7 +879,6 @@ window.__ModuleLoader__.load({
           if (busy) return;
           setBusy(true);
           setError('');
-          setNotice('');
           try {
             const response = await fetch(`${API}/player/control`, {
               method: 'POST',
@@ -902,15 +893,8 @@ window.__ModuleLoader__.load({
               setPlayer(data.state);
               if (typeof data.state.volume === 'number') setVolume(data.state.volume);
             }
-            if (action === 'like') {
-              setLiked(true);
-              setNotice(data?.alreadyLiked === true ? t('playerLikedAlready') : t('playerLiked'));
-              window.setTimeout(() => setNotice(''), 3000);
-            } else if (action === 'unlike') {
-              setLiked(false);
-              setNotice(t('playerUnliked'));
-              window.setTimeout(() => setNotice(''), 3000);
-            }
+            if (action === 'like') setLiked(true);
+            else if (action === 'unlike') setLiked(false);
           } catch (controlError) {
             setError(`${t('playerError')}：${controlError instanceof Error ? controlError.message : String(controlError)}`);
           } finally {
@@ -1099,7 +1083,6 @@ window.__ModuleLoader__.load({
                     )),
             ) : null,
             error ? h('div', { className: 'nsp-error' }, error) : null,
-            notice ? h('div', { className: 'nsp-notice' }, notice) : null,
           )
           : null;
 
