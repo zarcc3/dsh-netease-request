@@ -67,7 +67,7 @@ export function normalizeMood(value) {
  * Pick exactly one playable song for a mood.
  *
  * @param {string} mood
- * @param {{ searchSongs: (query: string) => Promise<unknown> }} deps
+ * @param {{ searchSongs: (query: string) => Promise<unknown>, isDuplicate?: (song: object) => boolean }} deps
  * @returns {Promise<object | null>} one song, or null when nothing playable
  */
 export async function pickSongForMood(mood, deps) {
@@ -87,6 +87,7 @@ export async function pickSongForMood(mood, deps) {
       && typeof song.encryptedId === 'string'
       && song.encryptedId !== ''
       && song.playable !== false
+      && !(typeof deps?.isDuplicate === 'function' && deps.isDuplicate(song))
     ));
     if (candidates.length === 0) return null;
 

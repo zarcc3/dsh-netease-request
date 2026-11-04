@@ -17,6 +17,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { MOODS, normalizeMood, pickSongForMood } from './mood.js';
+import { hasSong, rememberSong } from './dedupe.js';
 
 const ROUTE_ROOT = '/plugin-api/netease-request';
 const CONFIG_DIR_NAME = 'netease-request';
@@ -655,6 +656,7 @@ export async function officialRequestSong(config, options, signal) {
   if (play.code !== 0) {
     throw new Error(withModeHint(cliFailureText(play)));
   }
+  rememberSong(song);
 
   return {
     keywords,
@@ -786,6 +788,7 @@ export async function queueLikedSongs(count = 5) {
     }
     started = true;
     added.push(playlistSongSummary(first));
+    rememberSong(first);
     toQueue = picked.slice(1);
     if (toQueue.length > 0) await new Promise((resolve) => setTimeout(resolve, 2000));
   }
@@ -800,6 +803,7 @@ export async function queueLikedSongs(count = 5) {
       throw new Error(withModeHint(payload.message || cliFailureText(result)));
     }
     added.push(playlistSongSummary(track));
+    rememberSong(track);
   }
   return { playlist: liked.name, requested, started, added };
 }
@@ -856,6 +860,7 @@ async function enqueuePickedSongs(picked) {
     }
     started = true;
     added.push(searchSongSummary(first));
+    rememberSong(first);
     rest = picked.slice(1);
     if (rest.length > 0) await new Promise((resolve) => setTimeout(resolve, 2000));
   }
@@ -870,6 +875,7 @@ async function enqueuePickedSongs(picked) {
       throw new Error(withModeHint(payload.message || cliFailureText(result)));
     }
     added.push(searchSongSummary(song));
+    rememberSong(song);
   }
   return { started, added };
 }
@@ -1012,6 +1018,7 @@ async function fetchRecommendedSongs(kind, count) {
   for (const item of data) {
     const song = normalizeOfficialSong(item);
     if (!song || song.playable === false || song.encryptedId === '') continue;
+    if (hasSong(song)) continue;
     const key = song.encryptedId;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -1025,7 +1032,7 @@ export async function recommendSongs(options = {}) {
   const kind = options.kind === 'daily' ? 'daily' : 'heartbeat';
   const requested = Math.min(Math.max(Math.round(Number(options.count) || 10), 1), 30);
   const songs = await fetchRecommendedSongs(kind, requested);
-  if (songs.length === 0) throw new Error('没有获取到可播放的推荐歌曲。');
+  if (songs.length === 0) throw new Error('没有新的可播放推荐歌曲（可能都已包含在最近播放记录中）。');
 
   let started = false;
   if (options.play === true) {
@@ -1905,6 +1912,7 @@ export function apply(ctx) {
       }
       const song = await pickSongForMood(autoplay.mood, {
         searchSongs: async (query) => (await officialSearchSongs(config, query, 10)).songs,
+        isDuplicate: (candidate) => hasSong(candidate),
       });
       if (!song) return { ...base, skipped: 'no-song' };
 
@@ -1919,6 +1927,7 @@ export function apply(ctx) {
       }
       player.cacheAt = 0;
       player.queueAt = 0;
+      rememberSong(song);
       return { ok: true, mood: autoplay.mood, played: publicSong(song), skipped: '' };
     } catch (error) {
       console.warn(`[netease-request] 自动播放失败（${source ?? 'unknown'}）：`, messageOf(error));
