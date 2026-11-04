@@ -57,6 +57,26 @@ export function historySize() {
   return order.length;
 }
 
+/** Snapshot the keys in insertion order (oldest first). */
+export function exportHistory() {
+  return [...order];
+}
+
+/** Replace the history with validated keys, keeping the newest MAX_HISTORY. */
+export function importHistory(keys) {
+  clearHistory();
+  if (!Array.isArray(keys)) return;
+  for (const key of keys) {
+    if (typeof key !== 'string' || key === '' || seen.has(key)) continue;
+    seen.add(key);
+    order.push(key);
+    while (order.length > MAX_HISTORY) {
+      const oldest = order.shift();
+      if (oldest !== undefined) seen.delete(oldest);
+    }
+  }
+}
+
 /** Clear the history (used by tests/tools that need a clean slate). */
 export function clearHistory() {
   order.length = 0;

@@ -32,7 +32,7 @@
   - 主动点歌、主动加队列不查重，但播放/入队成功后会写回集合
   - 播放歌单（含私人雷达）时记录歌单内全部可播放歌曲
   - 去重键优先级：加密 ID → 32 位 hex 歌单曲目 ID → 原始 ID → 歌名|歌手
-  - 进程内存储，DSH 重启后重置
+  - 持久化到 `netease-request/history.json`，启动读取、退出写入
 - **设置页（设置 → 网易云点歌）**
   - App ID / Private Key / 播放器
   - ncm-cli、登录状态、mpv 检测
@@ -67,6 +67,7 @@
 ## 配置与数据
 
 - 插件设置：`%USERPROFILE%\.dsh\netease-request\config.json`
+- 去重历史：`%USERPROFILE%\.dsh\netease-request\history.json`
 - ncm-cli 凭证与缓存：`%USERPROFILE%\.config\ncm-cli\`
 - Private Key 只保存在本机设置文件和 ncm-cli 凭证中，不会写入仓库。
 

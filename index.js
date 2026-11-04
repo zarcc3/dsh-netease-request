@@ -11,17 +11,18 @@
  * the Client page over same-origin routes under `/plugin-api/netease-request`.
  */
 
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { spawn, spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { MOODS, normalizeMood, pickSongForMood } from './mood.js';
-import { hasSong, rememberSong } from './dedupe.js';
+import { exportHistory, hasSong, importHistory, rememberSong } from './dedupe.js';
 
 const ROUTE_ROOT = '/plugin-api/netease-request';
 const CONFIG_DIR_NAME = 'netease-request';
 const CONFIG_FILE_NAME = 'config.json';
+const HISTORY_FILE_NAME = 'history.json';
 const MAX_BODY_BYTES = 64 * 1024;
 const CLI_TIMEOUT_MS = 60_000;
 
@@ -60,6 +61,10 @@ export function configDirectory() {
 
 export function configFilePath() {
   return join(configDirectory(), CONFIG_FILE_NAME);
+}
+
+export function historyFilePath() {
+  return join(configDirectory(), HISTORY_FILE_NAME);
 }
 
 function messageOf(error) {
@@ -165,6 +170,34 @@ export async function persistConfig(config) {
   await mkdir(directory, { recursive: true });
   await writeFile(configFilePath(), `${JSON.stringify(config, null, 2)}\n`, 'utf8');
   return config;
+}
+
+/** Restore the in-memory played-song history from disk at startup. */
+export function loadHistory() {
+  try {
+    const text = readFileSync(historyFilePath(), 'utf8');
+    const parsed = JSON.parse(text);
+    const keys = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.keys) ? parsed.keys : [];
+    importHistory(keys);
+  } catch (error) {
+    if (!(error && typeof error === 'object' && error.code === 'ENOENT')) {
+      console.warn('[netease-request] 读取去重历史失败：', messageOf(error));
+    }
+  }
+}
+
+/** Persist the played-song history synchronously, for dispose/exit paths. */
+export function saveHistory() {
+  try {
+    mkdirSync(configDirectory(), { recursive: true });
+    writeFileSync(
+      historyFilePath(),
+      `${JSON.stringify({ version: 1, keys: exportHistory() }, null, 2)}\n`,
+      'utf8',
+    );
+  } catch (error) {
+    console.warn('[netease-request] 保存去重历史失败：', messageOf(error));
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -1819,6 +1852,7 @@ function methodNotAllowed(response, allow) {
 }
 
 export function apply(ctx) {
+  loadHistory();
   const state = { config: normalizeConfig(DEFAULT_CONFIG) };
   const ready = readStoredConfig().then((stored) => {
     state.config = stored;
@@ -2231,15 +2265,17 @@ export function apply(ctx) {
   }), 'netease-request: autoplay prompt');
 
   ctx.effect(() => {
-    const stopOnExit = () => {
+    const persistAndStop = () => {
+      saveHistory();
       stopPlaybackSync();
     };
-    process.once('exit', stopOnExit);
+    process.once('exit', persistAndStop);
     return () => {
-      process.removeListener('exit', stopOnExit);
+      process.removeListener('exit', persistAndStop);
+      saveHistory();
       stopPlaybackSync();
     };
-  }, 'netease-request: stop player on dispose');
+  }, 'netease-request: persist history and stop player on dispose');
 
   ctx.effect(() => {
     const disposers = createToolDefinitions(currentConfig, {
