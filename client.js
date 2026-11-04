@@ -8,7 +8,7 @@
  */
 
 window.__ModuleLoader__.load({
-  id: '@local/netease-request',
+  id: 'dsh-netease-request',
   factory(require) {
     const React = require('react');
     const h = React.createElement;
