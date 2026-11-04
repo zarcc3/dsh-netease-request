@@ -56,21 +56,47 @@
 
 ## 安装
 
+### 从 npm 安装（推荐）
+
 1. 安装依赖：
 
    ```bash
    npm install -g @music163/ncm-cli
    ```
 
-2. 将本目录作为 bundle 安装到 DSH profile（通过插件管理器或 Cordis patch）。
-3. 在 设置 → 网易云点歌 填写开放平台 App ID / Private Key，选择 mpv 并保存。
+2. 在 DSH 的插件管理器中安装 npm 包：
+
+   ```text
+   dsh-netease-request
+   ```
+
+   也可以通过插件管理器的「安装 bundle」选择该包名。
+
+3. 在 设置 → 网易云点歌 填写自己的开放平台 App ID / Private Key，选择 mpv 并保存。
 4. 登录：
 
    ```bash
    ncm-cli login --background
    ```
 
+   也可以直接使用设置页里的扫码登录。
+
 5. 在对话中说「点歌 <歌名> <歌手>」。
+
+### 本地源码安装
+
+适合开发和调试：
+
+1. 克隆仓库：
+
+   ```bash
+   git clone https://github.com/zarcc3/dsh-netease-request.git
+   ```
+
+2. 在 DSH 插件管理器中安装该**目录的绝对路径**。
+3. 后续步骤同上：填写凭证、选择 mpv、登录。
+
+> 每个使用者都需要自己的网易云开放平台 App ID / Private Key，仓库不包含任何私钥或账号数据。
 
 ## 配置与数据
 

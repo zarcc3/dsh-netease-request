@@ -1,9 +1,30 @@
 {
-  "name": "@local/netease-request",
+  "name": "dsh-netease-request",
   "version": "1.0.0",
-  "private": true,
-  "description": "Personal NetEase Cloud Music requests built on the official open-platform CLI: agent tools, sidebar player, queue and mood-based autoplay.",
+  "description": "NetEase Cloud Music player, queue, recommendations and mood-based autoplay for DeepSeek Harness (DSH), built on the official ncm-cli.",
   "license": "MIT",
+  "author": "zarcc3",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zarcc3/dsh-netease-request.git"
+  },
+  "homepage": "https://github.com/zarcc3/dsh-netease-request#readme",
+  "bugs": {
+    "url": "https://github.com/zarcc3/dsh-netease-request/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "netease",
+    "netease-cloud-music",
+    "ncm-cli",
+    "music",
+    "mpv",
+    "plugin"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "type": "module",
   "exports": {
     ".": "./index.js",
@@ -19,8 +40,13 @@
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
+  "scripts": {
+    "check": "node --check index.js && node --check client.js && node --check mood.js && node --check dedupe.js",
+    "prepublishOnly": "npm run check"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
@@ -32,5 +58,8 @@
         "@deepseek-ai/dsh-client-ui-settings"
       ]
     }
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
