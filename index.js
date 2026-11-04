@@ -808,6 +808,10 @@ function normalizeMoodPlaylistTrack(track) {
     ? String(track.originalId)
     : '';
   if (encryptedId === '' || originalId === '') return null;
+  const rawDuration = Number(track.duration) || 0;
+  const durationSeconds = rawDuration > 0
+    ? Math.round(rawDuration > 1000 ? rawDuration / 1000 : rawDuration)
+    : 0;
   return {
     id: Number(originalId) || 0,
     encryptedId,
@@ -816,7 +820,9 @@ function normalizeMoodPlaylistTrack(track) {
     artists: artistNames(track),
     album: track.album && typeof track.album === 'object' ? String(track.album.name ?? '') : '',
     playable: track.playFlag !== false,
-    duration: Number(track.duration) || 0,
+    duration: rawDuration,
+    durationSeconds,
+    pageUrl: songPageUrl(originalId),
   };
 }
 
@@ -1177,12 +1183,12 @@ export async function recommendSongs(options = {}) {
 
 function publicSong(song) {
   return {
-    id: song.id,
-    name: song.name,
-    artists: song.artists,
-    album: song.album,
-    durationSeconds: song.durationSeconds,
-    pageUrl: song.pageUrl,
+    id: Number(song.id) || 0,
+    name: String(song.name ?? ''),
+    artists: Array.isArray(song.artists) ? song.artists.map(String) : [],
+    album: String(song.album ?? ''),
+    durationSeconds: Number(song.durationSeconds) || 0,
+    pageUrl: String(song.pageUrl ?? ''),
     playable: song.playable !== false,
   };
 }
