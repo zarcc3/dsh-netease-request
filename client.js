@@ -327,6 +327,8 @@ window.__ModuleLoader__.load({
       '.nsp-btn{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;padding:0;border:none;border-radius:999px;background:transparent;color:var(--dsw-alias-label-primary);cursor:pointer;flex:none}',
       '.nsp-btn:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2)}',
       '.nsp-btn:disabled{opacity:.4;cursor:default}',
+      '.nsp-btn.is-liked{color:#e5484d}',
+      '.nsp-btn.is-liked:disabled{opacity:1;color:#e5484d;cursor:default}',
       '.nsp-play{background:var(--dsw-alias-brand-primary);color:#fff}',
       '.nsp-play:hover:not(:disabled){filter:brightness(.92);background:var(--dsw-alias-brand-primary)}',
       '.nsp-queue{margin-left:auto;padding:1px 6px;border:none;border-radius:999px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;line-height:16px;white-space:nowrap;cursor:pointer}',
@@ -801,6 +803,7 @@ window.__ModuleLoader__.load({
         const [busy, setBusy] = useState(false);
         const [error, setError] = useState('');
         const [notice, setNotice] = useState('');
+        const [liked, setLiked] = useState(false);
         const [open, setOpen] = useState(false);
         const [anchor, setAnchor] = useState(null);
         const [queueOpen, setQueueOpen] = useState(false);
@@ -845,6 +848,10 @@ window.__ModuleLoader__.load({
           };
         }, []);
 
+        useEffect(() => {
+          setLiked(false);
+        }, [player?.title, player?.currentIndex]);
+
         const control = async (action, value) => {
           if (busy) return;
           setBusy(true);
@@ -865,6 +872,7 @@ window.__ModuleLoader__.load({
               if (typeof data.state.volume === 'number') setVolume(data.state.volume);
             }
             if (action === 'like') {
+              setLiked(true);
               setNotice(data?.alreadyLiked === true ? t('playerLikedAlready') : t('playerLiked'));
               window.setTimeout(() => setNotice(''), 3000);
             }
@@ -1004,7 +1012,11 @@ window.__ModuleLoader__.load({
                 onClick: () => void control('next'),
               }, h(PlayerIcon, { kind: 'next' })),
               h('button', {
-                className: 'nsp-btn', type: 'button', title: t('playerLike'), disabled: !active || busy,
+                className: liked ? 'nsp-btn is-liked' : 'nsp-btn',
+                type: 'button',
+                title: liked ? t('playerLiked') : t('playerLike'),
+                'aria-pressed': liked,
+                disabled: !active || busy || liked,
                 onClick: () => void control('like'),
               }, h(PlayerIcon, { kind: 'heart' })),
               h('button', {
