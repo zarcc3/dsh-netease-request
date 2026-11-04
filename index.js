@@ -1744,8 +1744,8 @@ function createToolDefinitions(currentConfig, autoplayController = {}) {
     name: 'netease_play_mood',
     description:
       'Record the current conversation mood for the autoplay feature and, only when the player is stopped, pick one suitable song and play it. '
-      + 'Never interrupts music that is playing or paused. Use when the mood of the conversation changes noticeably, '
-      + 'including fiction / scene writing (e.g. romantic tension 暧昧, majestic 威严, battle, tense, mystery, horror, epic).',
+      + 'Never interrupts music that is playing or paused. Call it whenever the mood of the conversation or a written scene changes noticeably, '
+      + 'without waiting for an explicit request; supports daily moods and fiction scenes (e.g. romantic tension 暧昧, majestic 威严, battle, tense, mystery, horror, epic).',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -2254,16 +2254,6 @@ export function apply(ctx) {
     };
   }, 'netease-request: autoplay timers');
 
-  ctx.effect(() => ctx.systemPrompt.section({
-    name: 'tool:netease_play_mood',
-    order: 100,
-    text: () => {
-      const config = state.config;
-      if (!config?.autoplay?.enabled || config.autoplay.followConversation !== true) return '';
-      return '当对话氛围明显变化时（包括小说/剧情写作中的场景氛围，例如暧昧、威严、紧张、战斗、悬疑、惊悚），可以调用 netease_play_mood 记录氛围；当前正在播放或暂停时它只会记录，不会切歌；只有当前没有播放时才会挑选一首播放。';
-    },
-  }), 'netease-request: autoplay prompt');
-
   ctx.effect(() => {
     const persistAndStop = () => {
       saveHistory();
@@ -2288,4 +2278,4 @@ export function apply(ctx) {
 }
 
 export const name = 'netease-request';
-export const inject = ['tools', 'webServer', 'systemPrompt'];
+export const inject = ['tools', 'webServer'];
