@@ -641,8 +641,16 @@ function officialTotal(payload, fallback) {
 export async function officialSearchSongs(config, query, limit, signal) {
   const keywords = typeof query === 'string' ? query.trim() : '';
   if (keywords === '') throw new Error('搜索关键词不能为空');
+  const pageSize = Number.isFinite(limit)
+    ? Math.min(Math.max(Math.round(limit), 1), 50)
+    : config.searchLimit;
   const result = await runCli(
-    ['--output', 'json', 'search', 'song', '--keyword', keywords, '--userInput', `搜索歌曲：${keywords}`],
+    [
+      '--output', 'json', 'search', 'song',
+      '--keyword', keywords,
+      '--limit', String(pageSize),
+      '--userInput', `搜索歌曲：${keywords}`,
+    ],
     { timeoutMs: 45_000, signal },
   );
   if (result.code !== 0) {
@@ -654,9 +662,6 @@ export async function officialSearchSongs(config, query, limit, signal) {
   }
   const collected = [];
   collectOfficialSongs(payload, collected, new Set());
-  const pageSize = Number.isFinite(limit)
-    ? Math.min(Math.max(Math.round(limit), 1), 50)
-    : config.searchLimit;
   const songs = collected.slice(0, Math.max(pageSize, 1));
   return { keywords, total: officialTotal(payload, collected.length), songs };
 }
@@ -777,6 +782,67 @@ async function rememberPlaylistTracks(playlist) {
   } catch {
     // Playback already succeeded; history recording is best-effort.
   }
+}
+
+function normalizeMoodPlaylistTrack(track) {
+  const encryptedId = typeof track?.id === 'string' ? track.id : '';
+  const originalId = track?.originalId !== undefined && track?.originalId !== null
+    ? String(track.originalId)
+    : '';
+  if (encryptedId === '' || originalId === '') return null;
+  return {
+    id: Number(originalId) || 0,
+    encryptedId,
+    originalId,
+    name: String(track.name ?? ''),
+    artists: artistNames(track),
+    album: track.album && typeof track.album === 'object' ? String(track.album.name ?? '') : '',
+    playable: track.playFlag !== false,
+    duration: Number(track.duration) || 0,
+  };
+}
+
+async function searchMoodPlaylistSongs(query) {
+  try {
+    const result = await runCli(
+      [
+        '--output', 'json', 'search', 'playlist',
+        '--keyword', query,
+        '--limit', '5',
+        '--userInput', `搜索情绪歌单：${query}`,
+      ],
+      { timeoutMs: 30_000 },
+    );
+    if (result.code !== 0) return [];
+    const payload = parseJsonOutput(result.stdout) ?? parseJsonOutput(result.stderr) ?? {};
+    const records = Array.isArray(payload?.data?.records)
+      ? payload.data.records
+      : Array.isArray(payload?.data)
+        ? payload.data
+        : [];
+    for (const record of records.slice(0, 3)) {
+      const playlist = {
+        encryptedId: String(record?.id ?? ''),
+        originalId: String(record?.originalId ?? ''),
+        name: String(record?.name ?? ''),
+        trackCount: Number(record?.trackCount) || 0,
+      };
+      if (playlist.encryptedId === '' || playlist.trackCount === 0) continue;
+      try {
+        const tracks = await fetchPlaylistTracks(playlist);
+        const songs = tracks
+          .map(normalizeMoodPlaylistTrack)
+          .filter(Boolean)
+          .slice(0, 100);
+        if (songs.length > 0) return songs;
+      } catch {
+        // Try the next playlist.
+      }
+    }
+  } catch {
+    // No playlist fallback available.
+  }
+  return [];
 }
 
 function playlistSongSummary(track) {
@@ -1955,7 +2021,8 @@ export function apply(ctx) {
         return { ...base, skipped: current.status };
       }
       const song = await pickSongForMood(autoplay.mood, {
-        searchSongs: async (query) => (await officialSearchSongs(config, query, 10)).songs,
+        searchSongs: async (query, limit) => (await officialSearchSongs(config, query, limit ?? 50)).songs,
+        searchPlaylistSongs: async (query) => searchMoodPlaylistSongs(query),
         isDuplicate: (candidate) => hasSong(candidate),
       });
       if (!song) return { ...base, skipped: 'no-song' };

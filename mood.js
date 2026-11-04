@@ -2,7 +2,7 @@
  * Mood -> one-song selection for autoplay.
  *
  * This module is intentionally independent of Cordis, timers, settings and the
- * ncm-cli transport: `pickSongForMood` only needs a `searchSongs` function.
+ * ncm-cli transport: `pickSongForMood` only needs search functions.
  * Change the mood table or the selection strategy here without touching the
  * autoplay scheduler or the agent tool.
  *
@@ -57,54 +57,112 @@ export const MOOD_QUERIES = Object.freeze({
   dark: '黑暗 阴郁 低沉 暗黑',
 });
 
+/** How many results to request for the first song search. */
+export const MOOD_SEARCH_LIMIT = 50;
+
+/** Per-mood in-memory candidate cache. Never persisted. */
+const MOOD_CACHE = new Map();
+
 /** Coerce arbitrary input to a known mood key. */
 export function normalizeMood(value) {
   const mood = String(value ?? '').trim().toLowerCase();
   return MOODS.includes(mood) ? mood : 'calm';
 }
 
+function normalizeCachedSongs(result) {
+  const songs = Array.isArray(result)
+    ? result
+    : Array.isArray(result?.songs)
+      ? result.songs
+      : [];
+  const seen = new Set();
+  const normalized = [];
+  for (const song of songs) {
+    if (!song || typeof song !== 'object') continue;
+    if (typeof song.encryptedId !== 'string' || song.encryptedId === '') continue;
+    if (song.playable === false) continue;
+    if (seen.has(song.encryptedId)) continue;
+    seen.add(song.encryptedId);
+    normalized.push(song);
+  }
+  return normalized;
+}
+
+function freshCandidates(songs, deps) {
+  return songs.filter((song) => (
+    typeof deps?.isDuplicate === 'function' ? !deps.isDuplicate(song) : true
+  ));
+}
+
+function scoreSong(song, tokens) {
+  const name = String(song.name ?? '').toLowerCase();
+  const album = String(song.album ?? '').toLowerCase();
+  const artists = Array.isArray(song.artists) ? song.artists.join(' ').toLowerCase() : '';
+  let value = 0;
+  for (const token of tokens) {
+    if (name.includes(token)) value += 3;
+    else if (album.includes(token) || artists.includes(token)) value += 1;
+  }
+  return value;
+}
+
 /**
  * Pick exactly one playable song for a mood.
  *
+ * Search results are cached per mood in memory. If every cached song has
+ * already been played, fall back to songs from mood playlists and cache those
+ * too. Returns null only when no unseen candidate remains.
+ *
  * @param {string} mood
- * @param {{ searchSongs: (query: string) => Promise<unknown>, isDuplicate?: (song: object) => boolean }} deps
+ * @param {{
+ *   searchSongs: (query: string, limit?: number) => Promise<unknown>,
+ *   searchPlaylistSongs?: (query: string) => Promise<unknown>,
+ *   isDuplicate?: (song: object) => boolean,
+ * }} deps
  * @returns {Promise<object | null>} one song, or null when nothing playable
  */
 export async function pickSongForMood(mood, deps) {
   if (typeof deps?.searchSongs !== 'function') return null;
-  const query = MOOD_QUERIES[normalizeMood(mood)];
+  const moodKey = normalizeMood(mood);
+  const query = MOOD_QUERIES[moodKey];
   const tokens = query.split(/\s+/).filter(Boolean).map((token) => token.toLowerCase());
+
+  let cache = MOOD_CACHE.get(moodKey);
+  if (!cache) {
+    cache = { songs: [], playlistLoaded: false };
+    MOOD_CACHE.set(moodKey, cache);
+  }
+
   try {
-    const result = await deps.searchSongs(query);
-    const songs = Array.isArray(result)
-      ? result
-      : Array.isArray(result?.songs)
-        ? result.songs
-        : [];
-    const candidates = songs.filter((song) => (
-      song
-      && typeof song === 'object'
-      && typeof song.encryptedId === 'string'
-      && song.encryptedId !== ''
-      && song.playable !== false
-      && !(typeof deps?.isDuplicate === 'function' && deps.isDuplicate(song))
-    ));
-    if (candidates.length === 0) return null;
+    if (cache.songs.length === 0) {
+      const result = await deps.searchSongs(query, MOOD_SEARCH_LIMIT);
+      cache.songs = normalizeCachedSongs(result);
+    }
 
-    const score = (song) => {
-      const name = String(song.name ?? '').toLowerCase();
-      const album = String(song.album ?? '').toLowerCase();
-      const artists = Array.isArray(song.artists) ? song.artists.join(' ').toLowerCase() : '';
-      let value = 0;
-      for (const token of tokens) {
-        if (name.includes(token)) value += 3;
-        else if (album.includes(token) || artists.includes(token)) value += 1;
+    let fresh = freshCandidates(cache.songs, deps);
+    if (fresh.length === 0 && !cache.playlistLoaded && typeof deps.searchPlaylistSongs === 'function') {
+      cache.playlistLoaded = true;
+      const extra = await deps.searchPlaylistSongs(query);
+      const additions = normalizeCachedSongs(extra);
+      if (additions.length > 0) {
+        const known = new Set(cache.songs.map((song) => song.encryptedId));
+        for (const song of additions) {
+          if (known.has(song.encryptedId)) continue;
+          known.add(song.encryptedId);
+          cache.songs.push(song);
+        }
       }
-      return value;
-    };
+      fresh = freshCandidates(cache.songs, deps);
+    }
 
-    return [...candidates].sort((left, right) => score(right) - score(left))[0];
+    if (fresh.length === 0) return null;
+    return [...fresh].sort((left, right) => scoreSong(right, tokens) - scoreSong(left, tokens))[0];
   } catch {
     return null;
   }
+}
+
+/** Clear the per-mood cache (used by tests or a manual reset). */
+export function clearMoodCache() {
+  MOOD_CACHE.clear();
 }
