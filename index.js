@@ -979,10 +979,13 @@ async function clearPlayerQueue() {
 
 async function fetchRecommendedSongs(kind, count) {
   const limit = Math.min(Math.max(Math.round(Number(count) || 10), 1), 30);
+  const requestLimit = kind === 'daily'
+    ? Math.min(Math.max(limit * 4, 20), 40)
+    : Math.min(Math.max(limit * 3, 10), 40);
   let result;
   if (kind === 'daily') {
     result = await runCli(
-      ['--output', 'json', 'recommend', 'daily', '--limit', String(limit), '--userInput', '推荐歌曲'],
+      ['--output', 'json', 'recommend', 'daily', '--limit', String(requestLimit), '--userInput', '推荐歌曲'],
       { timeoutMs: 30_000 },
     );
   } else {
@@ -995,7 +998,7 @@ async function fetchRecommendedSongs(kind, count) {
         '--output', 'json', 'recommend', 'heartbeat',
         '--playlistId', liked.encryptedId,
         '--type', 'fromPlayAll',
-        '--count', String(limit),
+        '--count', String(requestLimit),
         '--userInput', '心动模式推荐',
       ],
       { timeoutMs: 30_000 },
@@ -1013,29 +1016,6 @@ async function fetchRecommendedSongs(kind, count) {
     if (seen.has(key)) continue;
     seen.add(key);
     songs.push(song);
-  }
-
-  if (kind !== 'daily' && songs.length < limit) {
-    try {
-      const fallback = await runCli(
-        ['--output', 'json', 'recommend', 'daily', '--limit', String(Math.min(Math.max(limit * 4, 20), 40)), '--userInput', '推荐歌曲'],
-        { timeoutMs: 30_000 },
-      );
-      if (fallback.code === 0) {
-        const fallbackPayload = parseJsonOutput(fallback.stdout) ?? parseJsonOutput(fallback.stderr) ?? {};
-        const fallbackData = Array.isArray(fallbackPayload?.data) ? fallbackPayload.data : [];
-        for (const item of fallbackData) {
-          if (songs.length >= limit) break;
-          const song = normalizeOfficialSong(item);
-          if (!song || song.playable === false || song.encryptedId === '') continue;
-          if (seen.has(song.encryptedId)) continue;
-          seen.add(song.encryptedId);
-          songs.push(song);
-        }
-      }
-    } catch {
-      // Keep the primary recommendations when the fallback fails.
-    }
   }
 
   return songs.slice(0, limit);
@@ -1599,12 +1579,12 @@ function createToolDefinitions(currentConfig, autoplayController = {}) {
     },
   };
 
-  const recommendPlaylistsTool = {
-    name: 'netease_recommend_playlists',
+  const radarPlaylistsTool = {
+    name: 'netease_radar_playlists',
     description:
-      'List the user\'s personalized NetEase radar playlists (推荐歌单) through the official ncm-cli. '
+      '私人雷达: list the user\'s personalized NetEase radar playlists (not songs) through the official ncm-cli. '
       + 'Set play=true with an optional 1-based index to start playing one immediately. '
-      + 'Use when the user asks for playlist recommendations or wants to play a recommended playlist.',
+      + 'Use when the user asks for recommended playlists; use netease_heartbeat or netease_daily_recommend for songs.',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -1628,7 +1608,7 @@ function createToolDefinitions(currentConfig, autoplayController = {}) {
     timeoutMs: 120_000,
     isConcurrencySafe: () => false,
     presentCall(args) {
-      const playing = args?.play === true ? `播放第 ${args?.index ?? 1} 个` : '获取推荐歌单';
+      const playing = args?.play === true ? `播放第 ${args?.index ?? 1} 个` : '私人雷达';
       return {
         card: 'generic',
         title: playing,
@@ -1642,26 +1622,18 @@ function createToolDefinitions(currentConfig, autoplayController = {}) {
     },
   };
 
-  const recommendSongsTool = {
-    name: 'netease_recommend_songs',
-    description:
-      'Get personalized song recommendations from the official ncm-cli: kind "heartbeat" (心动模式, based on the user\'s liked playlist) '
-      + 'or "daily" (每日推荐). Set play=true to start or queue them immediately, and replace=true to clear the current queue first. '
-      + 'Use when the user asks for song recommendations (推荐几首歌听听).',
+  const makeSongRecommendTool = ({ name, kind, title, description, countHint }) => ({
+    name,
+    description,
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        kind: {
-          type: 'string',
-          enum: ['heartbeat', 'daily'],
-          description: 'Recommendation source: heartbeat (default) or daily.',
-        },
         count: {
           type: 'integer',
           minimum: 1,
           maximum: 30,
-          description: 'How many recommendations to return. Defaults to 10.',
+          description: countHint,
         },
         play: {
           type: 'boolean',
@@ -1680,24 +1652,43 @@ function createToolDefinitions(currentConfig, autoplayController = {}) {
     timeoutMs: 180_000,
     isConcurrencySafe: () => false,
     presentCall(args) {
-      const kind = args?.kind === 'daily' ? '每日推荐' : '心动模式';
       return {
         card: 'generic',
-        title: `推荐歌曲：${kind}`,
+        title,
         kind: 'search',
         rawInput: args,
       };
     },
     async execute(args) {
       const result = await recommendSongs({
-        kind: args?.kind,
+        kind,
         count: args?.count,
         play: args?.play === true,
         replace: args?.replace === true,
       });
       return { ok: true, ...result };
     },
-  };
+  });
+
+  const heartbeatTool = makeSongRecommendTool({
+    name: 'netease_heartbeat',
+    kind: 'heartbeat',
+    title: '心动模式推荐',
+    countHint: 'How many songs to request. Heartbeat may return fewer than requested.',
+    description:
+      '心动模式: get personalized song recommendations (not a playlist) based on the user\'s liked playlist through ncm-cli. '
+      + 'Set play=true to start or queue them immediately; replace=true clears the current queue first.',
+  });
+
+  const dailyRecommendTool = makeSongRecommendTool({
+    name: 'netease_daily_recommend',
+    kind: 'daily',
+    title: '每日推荐',
+    countHint: 'How many daily recommended songs to return. Defaults to 10.',
+    description:
+      '每日推荐: get today\'s personalized NetEase recommendation songs (not a playlist) through ncm-cli. '
+      + 'Set play=true to start or queue them immediately; replace=true clears the current queue first.',
+  });
 
   const playMoodTool = {
     name: 'netease_play_mood',
@@ -1747,8 +1738,9 @@ function createToolDefinitions(currentConfig, autoplayController = {}) {
     queueLikedTool,
     playPlaylistTool,
     queueSongsTool,
-    recommendPlaylistsTool,
-    recommendSongsTool,
+    radarPlaylistsTool,
+    heartbeatTool,
+    dailyRecommendTool,
     playMoodTool,
   ];
 }
