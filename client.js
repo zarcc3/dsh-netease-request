@@ -94,8 +94,10 @@ window.__ModuleLoader__.load({
       playerPlay: '播放',
       playerPause: '暂停',
       playerLike: '喜欢',
+      playerUnlike: '取消喜欢',
       playerLiked: '已添加到喜欢的音乐',
       playerLikedAlready: '已经在喜欢的音乐中',
+      playerUnliked: '已取消喜欢',
       playerError: '播放控制失败',
       playerIdle: '未在播放',
       playerIdleHint: '说「放首歌」即可开始',
@@ -195,8 +197,10 @@ window.__ModuleLoader__.load({
       playerPlay: 'Play',
       playerPause: 'Pause',
       playerLike: 'Like',
+      playerUnlike: 'Unlike',
       playerLiked: 'Added to liked songs',
       playerLikedAlready: 'Already in liked songs',
+      playerUnliked: 'Removed from liked songs',
       playerError: 'Playback control failed',
       playerIdle: 'Nothing playing',
       playerIdleHint: 'Ask to play a song to start',
@@ -327,8 +331,6 @@ window.__ModuleLoader__.load({
       '.nsp-btn{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;padding:0;border:none;border-radius:999px;background:transparent;color:var(--dsw-alias-label-primary);cursor:pointer;flex:none}',
       '.nsp-btn:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2)}',
       '.nsp-btn:disabled{opacity:.4;cursor:default}',
-      '.nsp-btn.is-liked{color:#e5484d}',
-      '.nsp-btn.is-liked:disabled{opacity:1;color:#e5484d;cursor:default}',
       '.nsp-play{background:var(--dsw-alias-brand-primary);color:#fff}',
       '.nsp-play:hover:not(:disabled){filter:brightness(.92);background:var(--dsw-alias-brand-primary)}',
       '.nsp-queue{margin-left:auto;padding:1px 6px;border:none;border-radius:999px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;line-height:16px;white-space:nowrap;cursor:pointer}',
@@ -386,6 +388,18 @@ window.__ModuleLoader__.load({
           h('path', {
             d: 'M11 6.2a3 3 0 010 3.6M12.8 4.5a5.5 5.5 0 010 7',
             fill: 'none', stroke: 'currentColor', 'stroke-width': 1.2, 'stroke-linecap': 'round',
+          }),
+        );
+      }
+      if (shape === 'heart' || shape === 'heartFilled') {
+        const d = 'M8 13.7S2.3 10.2 2.3 6.2A3.2 3.2 0 018 4.2a3.2 3.2 0 015.7 2c0 4-5.7 7.5-5.7 7.5z';
+        return h('svg', { viewBox: '0 0 16 16', width: 14, height: 14, 'aria-hidden': true, focusable: false },
+          h('path', {
+            d,
+            fill: shape === 'heartFilled' ? 'currentColor' : 'none',
+            stroke: shape === 'heart' ? 'currentColor' : 'none',
+            'stroke-width': shape === 'heart' ? 1.2 : 0,
+            'stroke-linejoin': 'round',
           }),
         );
       }
@@ -804,6 +818,7 @@ window.__ModuleLoader__.load({
         const [error, setError] = useState('');
         const [notice, setNotice] = useState('');
         const [liked, setLiked] = useState(false);
+        const [likedLoading, setLikedLoading] = useState(false);
         const [open, setOpen] = useState(false);
         const [anchor, setAnchor] = useState(null);
         const [queueOpen, setQueueOpen] = useState(false);
@@ -849,8 +864,24 @@ window.__ModuleLoader__.load({
         }, []);
 
         useEffect(() => {
-          setLiked(false);
-        }, [player?.title, player?.currentIndex]);
+          if (!open) return;
+          let alive = true;
+          setLikedLoading(true);
+          fetch(`${API}/player/liked`, { headers: { accept: 'application/json' } })
+            .then(async (response) => {
+              const data = await response.json().catch(() => null);
+              if (alive && response.ok && data?.ok) setLiked(data.liked === true);
+            })
+            .catch(() => {
+              if (alive) setLiked(false);
+            })
+            .finally(() => {
+              if (alive) setLikedLoading(false);
+            });
+          return () => {
+            alive = false;
+          };
+        }, [open, player?.title, player?.currentIndex]);
 
         const control = async (action, value) => {
           if (busy) return;
@@ -874,6 +905,10 @@ window.__ModuleLoader__.load({
             if (action === 'like') {
               setLiked(true);
               setNotice(data?.alreadyLiked === true ? t('playerLikedAlready') : t('playerLiked'));
+              window.setTimeout(() => setNotice(''), 3000);
+            } else if (action === 'unlike') {
+              setLiked(false);
+              setNotice(t('playerUnliked'));
               window.setTimeout(() => setNotice(''), 3000);
             }
           } catch (controlError) {
@@ -1012,13 +1047,13 @@ window.__ModuleLoader__.load({
                 onClick: () => void control('next'),
               }, h(PlayerIcon, { kind: 'next' })),
               h('button', {
-                className: liked ? 'nsp-btn is-liked' : 'nsp-btn',
+                className: 'nsp-btn',
                 type: 'button',
-                title: liked ? t('playerLiked') : t('playerLike'),
+                title: liked ? t('playerUnlike') : t('playerLike'),
                 'aria-pressed': liked,
-                disabled: !active || busy || liked,
-                onClick: () => void control('like'),
-              }, h(PlayerIcon, { kind: 'heart' })),
+                disabled: !active || busy || likedLoading,
+                onClick: () => void control(liked ? 'unlike' : 'like'),
+              }, h(PlayerIcon, { kind: liked ? 'heartFilled' : 'heart' })),
               h('button', {
                 className: 'nsp-queue',
                 type: 'button',

@@ -2057,7 +2057,7 @@ export function apply(ctx) {
     return value;
   };
 
-  const likeCurrentSong = async () => {
+  const resolveCurrentSong = async () => {
     const queueResult = await runCli(['queue'], { timeoutMs: 15_000 });
     const queuePayload = parseJsonOutput(queueResult.stdout) ?? parseJsonOutput(queueResult.stderr) ?? {};
     if (queueResult.code !== 0 && queuePayload.success === false) {
@@ -2107,16 +2107,19 @@ export function apply(ctx) {
       id: encryptedId,
       name: title || '当前歌曲',
     });
+    return { encryptedId, song, liked: match?.liked === true };
+  };
 
-    if (match?.liked === true) {
-      return { song: publicSong(song), liked: true, alreadyLiked: true };
+  const setCurrentSongLiked = async (liked) => {
+    const current = await resolveCurrentSong();
+    if (current.liked === liked) {
+      return { song: publicSong(current.song), liked, alreadyLiked: liked };
     }
-
     const result = await runCli(
       [
-        '--output', 'json', 'song', 'like',
-        '--songId', encryptedId,
-        '--userInput', `喜欢：${song.name}`,
+        '--output', 'json', 'song', liked ? 'like' : 'dislike',
+        '--songId', current.encryptedId,
+        '--userInput', `${liked ? '喜欢' : '取消喜欢'}：${current.song.name}`,
       ],
       { timeoutMs: 30_000 },
     );
@@ -2124,7 +2127,14 @@ export function apply(ctx) {
     if (result.code !== 0 || payload.success === false) {
       throw new Error(withModeHint(payload.message || cliFailureText(result)));
     }
-    return { song: publicSong(song), liked: true, alreadyLiked: false };
+    return { song: publicSong(current.song), liked, alreadyLiked: false };
+  };
+
+  const likeCurrentSong = () => setCurrentSongLiked(true);
+  const unlikeCurrentSong = () => setCurrentSongLiked(false);
+  const readCurrentLiked = async () => {
+    const current = await resolveCurrentSong();
+    return { song: publicSong(current.song), liked: current.liked };
   };
 
   const autoplay = { mood: DEFAULT_AUTOPLAY.startupMood, running: false };
@@ -2193,6 +2203,19 @@ export function apply(ctx) {
       sendJson(response, 200, { ok: true, state: value });
     } catch (error) {
       throw new HttpError(502, messageOf(error));
+    }
+  };
+
+  const handlePlayerLiked = async (request, response) => {
+    if (request.method !== 'GET') {
+      methodNotAllowed(response, 'GET');
+      return;
+    }
+    try {
+      const value = await readCurrentLiked();
+      sendJson(response, 200, { ok: true, ...value });
+    } catch (error) {
+      throw new HttpError(409, messageOf(error));
     }
   };
 
@@ -2272,9 +2295,9 @@ export function apply(ctx) {
     }
     const body = await readJsonBody(request);
     const action = typeof body?.action === 'string' ? body.action : '';
-    if (action === 'like') {
+    if (action === 'like' || action === 'unlike') {
       try {
-        const result = await likeCurrentSong();
+        const result = await (action === 'like' ? likeCurrentSong() : unlikeCurrentSong());
         player.cacheAt = 0;
         const next = await readPlayerState(true);
         sendJson(response, 200, { ok: true, ...result, state: next });
@@ -2404,6 +2427,11 @@ export function apply(ctx) {
         kind: 'exact',
         path: `${ROUTE_ROOT}/player/state`,
         handler: guarded(handlePlayerState),
+      }),
+      ctx.webServer.register({
+        kind: 'exact',
+        path: `${ROUTE_ROOT}/player/liked`,
+        handler: guarded(handlePlayerLiked),
       }),
       ctx.webServer.register({
         kind: 'exact',
