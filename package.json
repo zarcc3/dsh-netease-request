@@ -1,6 +1,6 @@
 {
   "name": "dsh-netease-request",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "NetEase Cloud Music player, queue, recommendations and mood-based autoplay for DeepSeek Harness (DSH), built on the official ncm-cli.",
   "license": "MIT",
   "author": "zarcc3",
