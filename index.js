@@ -1480,6 +1480,27 @@ function formatMoodResult(value) {
   return `已记录氛围「${label}」；本轮未播放。`;
 }
 
+const LIKE_CURRENT_OUTPUT_SCHEMA = {
+  type: 'object',
+  properties: {
+    ok: { type: 'boolean' },
+    song: { oneOf: [SONG_SCHEMA, { type: 'null' }] },
+    liked: { type: 'boolean' },
+    alreadyLiked: { type: 'boolean' },
+  },
+  required: ['ok', 'song', 'liked', 'alreadyLiked'],
+};
+
+function formatLikeCurrentResult(value) {
+  const song = value.song;
+  if (!song) return '没有识别到当前歌曲。';
+  const artist = song.artists.length > 0 ? ` — ${song.artists.join('/')}` : '';
+  if (value.alreadyLiked === true) {
+    return `《${song.name}》${artist} 已经在「喜欢的音乐」中。`;
+  }
+  return `已把《${song.name}》${artist} 添加到「喜欢的音乐」。`;
+}
+
 function createToolDefinitions(currentConfig, autoplayController = {}) {
   const searchTool = {
     name: 'netease_search_songs',
@@ -1806,6 +1827,39 @@ function createToolDefinitions(currentConfig, autoplayController = {}) {
       + 'Set play=true to start or queue them immediately; replace=true clears the current queue first.',
   });
 
+  const likeCurrentTool = {
+    name: 'netease_like_current',
+    description:
+      'Add the currently playing or paused NetEase song to the user\'s 喜欢的音乐 through the official ncm-cli. '
+      + 'Use when the user asks to like/favorite the current song. Fails if no current song can be identified.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+    },
+    output: {
+      schema: LIKE_CURRENT_OUTPUT_SCHEMA,
+      render: (_args, value) => [{ type: 'text', text: formatLikeCurrentResult(value) }],
+    },
+    timeoutMs: 60_000,
+    isConcurrencySafe: () => false,
+    presentCall() {
+      return {
+        card: 'generic',
+        title: '喜欢当前歌曲',
+        kind: 'search',
+        rawInput: {},
+      };
+    },
+    async execute() {
+      if (typeof autoplayController.likeCurrent !== 'function') {
+        throw new Error('喜欢当前歌曲的控制器未就绪');
+      }
+      const result = await autoplayController.likeCurrent();
+      return { ok: true, ...result };
+    },
+  };
+
   const playMoodTool = {
     name: 'netease_play_mood',
     description:
@@ -1857,6 +1911,7 @@ function createToolDefinitions(currentConfig, autoplayController = {}) {
     radarPlaylistsTool,
     heartbeatTool,
     dailyRecommendTool,
+    likeCurrentTool,
     playMoodTool,
   ];
 }
@@ -2000,6 +2055,76 @@ export function apply(ctx) {
     player.cache = value;
     player.cacheAt = Date.now();
     return value;
+  };
+
+  const likeCurrentSong = async () => {
+    const queueResult = await runCli(['queue'], { timeoutMs: 15_000 });
+    const queuePayload = parseJsonOutput(queueResult.stdout) ?? parseJsonOutput(queueResult.stderr) ?? {};
+    if (queueResult.code !== 0 && queuePayload.success === false) {
+      throw new Error(withModeHint(cliFailureText(queueResult)));
+    }
+    const queue = Array.isArray(queuePayload.queue) ? queuePayload.queue : [];
+    const current = queue.find((item) => item?.current === true);
+    const label = String(current?.label ?? '');
+    const queueId = /^([0-9A-Fa-f]{32})\b/.exec(label)?.[1] ?? '';
+    const state = await readPlayerState(true);
+    const title = String(state.title ?? '').trim()
+      || label.replace(/^[0-9A-Fa-f]{32}\s*\|\s*/, '').replace(/^歌曲 ID:.*$/i, '').trim();
+
+    const historyResult = await runCli(
+      ['--output', 'json', 'user', 'history', '--limit', '20', '--userInput', '查找当前歌曲'],
+      { timeoutMs: 30_000 },
+    );
+    const historyPayload = parseJsonOutput(historyResult.stdout) ?? parseJsonOutput(historyResult.stderr) ?? {};
+    if (historyResult.code !== 0 || !historyPayload?.data) {
+      throw new Error(withModeHint(cliFailureText(historyResult)));
+    }
+    const history = Array.isArray(historyPayload?.data?.songListVo)
+      ? historyPayload.data.songListVo
+      : Array.isArray(historyPayload?.data?.songs)
+        ? historyPayload.data.songs
+        : [];
+
+    const normalize = (value) => String(value ?? '').toLowerCase().replace(/\s+/g, '');
+    const normalizedTitle = normalize(title);
+    let match = queueId === ''
+      ? null
+      : history.find((song) => String(song?.id ?? '') === queueId) ?? null;
+    if (match === null && normalizedTitle !== '') {
+      match = history.find((song) => {
+        const name = normalize(song?.name);
+        if (name === '' || !normalizedTitle.includes(name)) return false;
+        const artist = normalize(song?.artists?.[0]?.name);
+        return artist === '' || normalizedTitle.includes(artist);
+      }) ?? null;
+    }
+
+    const encryptedId = queueId !== '' ? queueId : String(match?.id ?? '');
+    if (encryptedId === '') {
+      throw new Error('无法识别当前歌曲，可能没有正在播放的歌曲。');
+    }
+    const song = normalizeOfficialSong(match ?? {
+      id: encryptedId,
+      name: title || '当前歌曲',
+    });
+
+    if (match?.liked === true) {
+      return { song: publicSong(song), liked: true, alreadyLiked: true };
+    }
+
+    const result = await runCli(
+      [
+        '--output', 'json', 'song', 'like',
+        '--songId', encryptedId,
+        '--userInput', `喜欢：${song.name}`,
+      ],
+      { timeoutMs: 30_000 },
+    );
+    const payload = parseJsonOutput(result.stdout) ?? parseJsonOutput(result.stderr) ?? {};
+    if (result.code !== 0 || payload.success === false) {
+      throw new Error(withModeHint(payload.message || cliFailureText(result)));
+    }
+    return { song: publicSong(song), liked: true, alreadyLiked: false };
   };
 
   const autoplay = { mood: DEFAULT_AUTOPLAY.startupMood, running: false };
@@ -2147,6 +2272,17 @@ export function apply(ctx) {
     }
     const body = await readJsonBody(request);
     const action = typeof body?.action === 'string' ? body.action : '';
+    if (action === 'like') {
+      try {
+        const result = await likeCurrentSong();
+        player.cacheAt = 0;
+        const next = await readPlayerState(true);
+        sendJson(response, 200, { ok: true, ...result, state: next });
+      } catch (error) {
+        throw new HttpError(409, messageOf(error));
+      }
+      return;
+    }
     let args;
     if (action === 'pause') args = ['pause'];
     else if (action === 'resume') args = ['resume'];
@@ -2337,6 +2473,7 @@ export function apply(ctx) {
   ctx.effect(() => {
     const disposers = createToolDefinitions(currentConfig, {
       applyMood: (mood) => runAutoplay({ mood, source: 'tool' }),
+      likeCurrent: () => likeCurrentSong(),
     }).map((definition) => ctx.tools.register(definition));
     return () => {
       for (const dispose of disposers) dispose();
