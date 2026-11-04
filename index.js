@@ -737,6 +737,15 @@ async function fetchPlaylistTracks(playlist) {
   return tracks.filter((track) => track && track.playFlag !== false && track.id && track.originalId);
 }
 
+async function rememberPlaylistTracks(playlist) {
+  try {
+    const tracks = await fetchPlaylistTracks(playlist);
+    for (const track of tracks) rememberSong(track);
+  } catch {
+    // Playback already succeeded; history recording is best-effort.
+  }
+}
+
 function playlistSongSummary(track) {
   const id = Number(track.originalId) || 0;
   const album = track.album && typeof track.album === 'object' ? String(track.album.name ?? '') : '';
@@ -823,6 +832,7 @@ export async function playPlaylistByName(name) {
   if (result.code !== 0 || payload.success === false) {
     throw new Error(withModeHint(payload.message || cliFailureText(result)));
   }
+  await rememberPlaylistTracks(playlist);
   return { name: playlist.name, kind: playlist.kind, trackCount: playlist.trackCount };
 }
 
@@ -966,6 +976,7 @@ export async function recommendPlaylists(options = {}) {
       throw new Error(withModeHint(payload.message || cliFailureText(result)));
     }
     playing = playlist.name;
+    await rememberPlaylistTracks(playlist);
   }
 
   return {
@@ -1018,7 +1029,6 @@ async function fetchRecommendedSongs(kind, count) {
   for (const item of data) {
     const song = normalizeOfficialSong(item);
     if (!song || song.playable === false || song.encryptedId === '') continue;
-    if (hasSong(song)) continue;
     const key = song.encryptedId;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -1032,7 +1042,7 @@ export async function recommendSongs(options = {}) {
   const kind = options.kind === 'daily' ? 'daily' : 'heartbeat';
   const requested = Math.min(Math.max(Math.round(Number(options.count) || 10), 1), 30);
   const songs = await fetchRecommendedSongs(kind, requested);
-  if (songs.length === 0) throw new Error('没有新的可播放推荐歌曲（可能都已包含在最近播放记录中）。');
+  if (songs.length === 0) throw new Error('没有获取到可播放的推荐歌曲。');
 
   let started = false;
   if (options.play === true) {
