@@ -79,6 +79,7 @@ icon.svg           插件图标
 - 单曲队列在 `ncm-cli queue` 中返回加密 ID，插件会用当前播放标题替换。
 - 队列单曲删除不受官方 CLI 支持（仅 add / clear）。
 - `ncm-cli state` 会把暂停报告成 `stopped`，插件额外记录暂停标记，避免自动播放恢复暂停中的音乐。
+- 插件卸载或 DSH 进程退出时会同步执行 `ncm-cli stop`，停止播放并让 mpv 退出。
 
 ## License
 

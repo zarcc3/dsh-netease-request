@@ -13,7 +13,7 @@
 
 import { existsSync, readdirSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { MOODS, normalizeMood, pickSongForMood } from './mood.js';
@@ -329,6 +329,26 @@ async function runCli(args, options) {
     throw new Error('未找到 ncm-cli。请先安装官方 CLI：npm install -g @music163/ncm-cli');
   }
   return runProcess(invocation.command, [...invocation.prefixArgs, ...args], options);
+}
+
+/**
+ * Stop playback synchronously. Used from plugin disposal and process exit,
+ * where asynchronous work would not get a chance to run before the Host exits.
+ */
+function stopPlaybackSync() {
+  const invocation = cliInvocation();
+  if (invocation === null) return false;
+  try {
+    const result = spawnSync(invocation.command, [...invocation.prefixArgs, 'stop'], {
+      timeout: 5000,
+      windowsHide: true,
+      stdio: 'ignore',
+      env: cliEnvironment(),
+    });
+    return result.status === 0;
+  } catch {
+    return false;
+  }
 }
 
 function parseJsonOutput(text) {
@@ -2198,6 +2218,17 @@ export function apply(ctx) {
       return '当对话氛围明显变化时（包括小说/剧情写作中的场景氛围，例如暧昧、威严、紧张、战斗、悬疑、惊悚），可以调用 netease_play_mood 记录氛围；当前正在播放或暂停时它只会记录，不会切歌；只有当前没有播放时才会挑选一首播放。';
     },
   }), 'netease-request: autoplay prompt');
+
+  ctx.effect(() => {
+    const stopOnExit = () => {
+      stopPlaybackSync();
+    };
+    process.once('exit', stopOnExit);
+    return () => {
+      process.removeListener('exit', stopOnExit);
+      stopPlaybackSync();
+    };
+  }, 'netease-request: stop player on dispose');
 
   ctx.effect(() => {
     const disposers = createToolDefinitions(currentConfig, {
