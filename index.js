@@ -67,6 +67,11 @@ export function historyFilePath() {
   return join(configDirectory(), HISTORY_FILE_NAME);
 }
 
+/** Isolated mpv config directory so ncm-cli's mpv starts at the plugin volume. */
+export function mpvHomeDirectory() {
+  return join(configDirectory(), 'mpv');
+}
+
 function messageOf(error) {
   if (error && typeof error === 'object') {
     const cause = error.cause;
@@ -170,6 +175,18 @@ export async function persistConfig(config) {
   await mkdir(directory, { recursive: true });
   await writeFile(configFilePath(), `${JSON.stringify(config, null, 2)}\n`, 'utf8');
   return config;
+}
+
+/** Write the mpv startup volume so a newly spawned mpv does not start at 100. */
+export async function writeMpvVolume(volume) {
+  try {
+    const directory = mpvHomeDirectory();
+    await mkdir(directory, { recursive: true });
+    const value = Math.min(Math.max(Math.round(Number(volume) || 0), 0), 100);
+    await writeFile(join(directory, 'mpv.conf'), `volume=${value}\n`, 'utf8');
+  } catch (error) {
+    console.warn('[netease-request] 写入 mpv 音量配置失败：', messageOf(error));
+  }
 }
 
 /** Restore the in-memory played-song history from disk at startup. */
@@ -287,6 +304,7 @@ export function findMpvExecutable() {
 /** Environment for CLI children: prepend the discovered mpv directory to PATH. */
 function cliEnvironment() {
   const env = { ...process.env };
+  env.MPV_HOME = mpvHomeDirectory();
   const mpv = findMpvExecutable();
   if (mpv !== '') {
     const key = Object.keys(env).find((name) => name.toLowerCase() === 'path') ?? 'PATH';
@@ -2016,8 +2034,9 @@ function methodNotAllowed(response, allow) {
 export function apply(ctx) {
   loadHistory();
   const state = { config: normalizeConfig(DEFAULT_CONFIG) };
-  const ready = readStoredConfig().then((stored) => {
+  const ready = readStoredConfig().then(async (stored) => {
     state.config = stored;
+    await writeMpvVolume(stored.volume);
   });
   const currentConfig = async () => {
     await ready;
@@ -2227,6 +2246,7 @@ export function apply(ctx) {
   const persistVolume = async (volume) => {
     player.volume = volume;
     state.config = { ...state.config, volume };
+    await writeMpvVolume(volume);
     try {
       await persistConfig(state.config);
     } catch (error) {
@@ -2316,6 +2336,7 @@ export function apply(ctx) {
     const value = clampVolume(body?.value);
     player.volume = value;
     state.config = { ...state.config, volume: value };
+    void writeMpvVolume(value);
     if (player.volumeSaveTimer !== null) clearTimeout(player.volumeSaveTimer);
     player.volumeSaveTimer = setTimeout(() => {
       player.volumeSaveTimer = null;
@@ -2412,6 +2433,7 @@ export function apply(ctx) {
     }
 
     const official = await applyOfficialSettings(saved.official);
+    await writeMpvVolume(saved.volume);
     sendJson(response, 200, {
       ok: true,
       config: publicConfig(saved),

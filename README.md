@@ -102,6 +102,7 @@
 
 - 插件设置：`%USERPROFILE%\.dsh\netease-request\config.json`
 - 去重历史：`%USERPROFILE%\.dsh\netease-request\history.json`
+- mpv 启动音量：`%USERPROFILE%\.dsh\netease-request\mpv\mpv.conf`（通过 `MPV_HOME` 隔离）
 - ncm-cli 凭证与缓存：`%USERPROFILE%\.config\ncm-cli\`
 - Private Key 只保存在本机设置文件和 ncm-cli 凭证中，不会写入仓库。
 
@@ -110,6 +111,7 @@
 ```text
 index.js           Host 半侧：设置接口、ncm-cli 调用、Agent 工具、自动播放
 mood.js            情绪选歌模块（可独立修改关键词与选歌策略）
+dedupe.js          最近播放去重集合（100 首 FIFO，持久化）
 client.js          Client 半侧：设置页、侧边栏播放器
 cordis.patch.yml   Bundle patch
 locale/            插件管理器中显示的标题与描述
@@ -123,6 +125,7 @@ icon.svg           插件图标
 - 队列单曲删除不受官方 CLI 支持（仅 add / clear）。
 - `ncm-cli state` 会把暂停报告成 `stopped`，插件额外记录暂停标记，避免自动播放恢复暂停中的音乐。
 - 插件卸载或 DSH 进程退出时会同步执行 `ncm-cli stop`，停止播放并让 mpv 退出。
+- 每次启动新的 mpv 时通过隔离的 `MPV_HOME` 读取 `mpv.conf` 中的音量，避免新歌从默认 100 开始。
 
 ## License
 
