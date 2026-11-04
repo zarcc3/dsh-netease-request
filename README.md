@@ -16,6 +16,7 @@
   - `netease_heartbeat`：心动模式歌曲推荐（基于喜欢的歌单），可列出或直接播放
   - `netease_daily_recommend`：每日推荐歌曲，可列出或直接播放
   - `netease_like_current`：把当前播放/暂停的歌曲加入「喜欢的音乐」；已喜欢会直接返回
+  - `netease_unlike_current`：把当前歌曲从「喜欢的音乐」移除
   - `netease_play_mood`：记录对话氛围；仅在当前没有播放时挑一首适合的歌，不会打断播放/暂停中的音乐
 - **侧边栏播放器**
   - 常驻音符按钮，点击展开播放面板

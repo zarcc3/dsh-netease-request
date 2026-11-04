@@ -1501,6 +1501,13 @@ function formatLikeCurrentResult(value) {
   return `已把《${song.name}》${artist} 添加到「喜欢的音乐」。`;
 }
 
+function formatUnlikeCurrentResult(value) {
+  const song = value.song;
+  if (!song) return '没有识别到当前歌曲。';
+  const artist = song.artists.length > 0 ? ` — ${song.artists.join('/')}` : '';
+  return `已把《${song.name}》${artist} 从「喜欢的音乐」移除。`;
+}
+
 function createToolDefinitions(currentConfig, autoplayController = {}) {
   const searchTool = {
     name: 'netease_search_songs',
@@ -1860,6 +1867,39 @@ function createToolDefinitions(currentConfig, autoplayController = {}) {
     },
   };
 
+  const unlikeCurrentTool = {
+    name: 'netease_unlike_current',
+    description:
+      'Remove the currently playing or paused NetEase song from the user\'s 喜欢的音乐 (取消红心) through the official ncm-cli. '
+      + 'Use when the user asks to unlike/unfavorite the current song. Fails if no current song can be identified.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+    },
+    output: {
+      schema: LIKE_CURRENT_OUTPUT_SCHEMA,
+      render: (_args, value) => [{ type: 'text', text: formatUnlikeCurrentResult(value) }],
+    },
+    timeoutMs: 60_000,
+    isConcurrencySafe: () => false,
+    presentCall() {
+      return {
+        card: 'generic',
+        title: '取消喜欢当前歌曲',
+        kind: 'search',
+        rawInput: {},
+      };
+    },
+    async execute() {
+      if (typeof autoplayController.unlikeCurrent !== 'function') {
+        throw new Error('取消喜欢当前歌曲的控制器未就绪');
+      }
+      const result = await autoplayController.unlikeCurrent();
+      return { ok: true, ...result };
+    },
+  };
+
   const playMoodTool = {
     name: 'netease_play_mood',
     description:
@@ -1912,6 +1952,7 @@ function createToolDefinitions(currentConfig, autoplayController = {}) {
     heartbeatTool,
     dailyRecommendTool,
     likeCurrentTool,
+    unlikeCurrentTool,
     playMoodTool,
   ];
 }
@@ -2502,6 +2543,7 @@ export function apply(ctx) {
     const disposers = createToolDefinitions(currentConfig, {
       applyMood: (mood) => runAutoplay({ mood, source: 'tool' }),
       likeCurrent: () => likeCurrentSong(),
+      unlikeCurrent: () => unlikeCurrentSong(),
     }).map((definition) => ctx.tools.register(definition));
     return () => {
       for (const dispose of disposers) dispose();
