@@ -53,6 +53,11 @@ export function songPageUrl(id) {
   return `https://music.163.com/#/song?id=${encodeURIComponent(String(id))}`;
 }
 
+/** Whether the current queue position has no following track. */
+export function isLastQueueItem(state) {
+  return Number(state?.queueLength) <= Number(state?.currentIndex) + 1;
+}
+
 export function configDirectory() {
   const home = process.env.DSH_HOME?.trim()
     || join(process.env.USERPROFILE || process.env.HOME || homedir(), '.dsh');
@@ -2375,11 +2380,20 @@ export function apply(ctx) {
       }
       return;
     }
+    let nextEndsPlayback = false;
+    if (action === 'next') {
+      try {
+        const current = await readPlayerState(true);
+        nextEndsPlayback = isLastQueueItem(current);
+      } catch {
+        nextEndsPlayback = false;
+      }
+    }
     let args;
     if (action === 'pause') args = ['pause'];
     else if (action === 'resume') args = ['resume'];
     else if (action === 'stop') args = ['stop'];
-    else if (action === 'next') args = ['next'];
+    else if (action === 'next') args = nextEndsPlayback ? ['stop'] : ['next'];
     else if (action === 'prev') args = ['prev'];
     else if (action === 'queueClear') args = ['queue', 'clear'];
     else if (action === 'seek') {
