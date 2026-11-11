@@ -109,9 +109,10 @@ function scoreSong(song, tokens) {
 /**
  * Pick exactly one playable song for a mood.
  *
- * Search results are cached per mood in memory. If every cached song has
+ * Search results are cached per mood in memory. Whenever every cached song has
  * already been played, fall back to songs from mood playlists and cache those
- * too. Returns null only when no unseen candidate remains.
+ * too; the playlist fallback is retried on each attempt, not only once per
+ * process. Returns null only when no unseen candidate remains.
  *
  * @param {string} mood
  * @param {{
@@ -129,7 +130,7 @@ export async function pickSongForMood(mood, deps) {
 
   let cache = MOOD_CACHE.get(moodKey);
   if (!cache) {
-    cache = { songs: [], playlistLoaded: false };
+    cache = { songs: [] };
     MOOD_CACHE.set(moodKey, cache);
   }
 
@@ -140,8 +141,7 @@ export async function pickSongForMood(mood, deps) {
     }
 
     let fresh = freshCandidates(cache.songs, deps);
-    if (fresh.length === 0 && !cache.playlistLoaded && typeof deps.searchPlaylistSongs === 'function') {
-      cache.playlistLoaded = true;
+    if (fresh.length === 0 && typeof deps.searchPlaylistSongs === 'function') {
       const extra = await deps.searchPlaylistSongs(query);
       const additions = normalizeCachedSongs(extra);
       if (additions.length > 0) {

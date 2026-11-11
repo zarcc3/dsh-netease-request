@@ -774,15 +774,17 @@ export function matchPlaylistByName(playlists, name) {
   throw new Error(`没有找到歌单「${name}」。`);
 }
 
-async function fetchPlaylistTracks(playlist) {
+async function fetchPlaylistTracks(playlist, maxTracks = 5000) {
   const tracks = [];
+  const limit = Math.min(Math.max(Math.round(Number(maxTracks) || 5000), 1), 5000);
+  const pageSize = Math.min(limit, 500);
   let offset = 0;
-  while (offset < 5000) {
+  while (offset < limit) {
     const result = await runCli(
       [
         '--output', 'json', 'playlist', 'tracks',
         '--playlistId', playlist.encryptedId,
-        '--limit', '500',
+        '--limit', String(pageSize),
         '--offset', String(offset),
         '--userInput', `读取歌单「${playlist.name}」`,
       ],
@@ -792,10 +794,12 @@ async function fetchPlaylistTracks(playlist) {
     const payload = parseJsonOutput(result.stdout) ?? parseJsonOutput(result.stderr) ?? {};
     const page = Array.isArray(payload?.data) ? payload.data : [];
     tracks.push(...page);
-    if (page.length < 500) break;
-    offset += 500;
+    if (page.length < pageSize) break;
+    offset += pageSize;
   }
-  return tracks.filter((track) => track && track.playFlag !== false && track.id && track.originalId);
+  return tracks
+    .filter((track) => track && track.playFlag !== false && track.id && track.originalId)
+    .slice(0, limit);
 }
 
 async function rememberPlaylistTracks(playlist) {
@@ -837,7 +841,7 @@ async function searchMoodPlaylistSongs(query) {
       [
         '--output', 'json', 'search', 'playlist',
         '--keyword', query,
-        '--limit', '5',
+        '--limit', '20',
         '--userInput', `搜索情绪歌单：${query}`,
       ],
       { timeoutMs: 30_000 },
@@ -849,7 +853,9 @@ async function searchMoodPlaylistSongs(query) {
       : Array.isArray(payload?.data)
         ? payload.data
         : [];
-    for (const record of records.slice(0, 3)) {
+    const collected = [];
+    const seen = new Set();
+    for (const record of records.slice(0, 10)) {
       const playlist = {
         encryptedId: String(record?.id ?? ''),
         originalId: String(record?.originalId ?? ''),
@@ -858,16 +864,20 @@ async function searchMoodPlaylistSongs(query) {
       };
       if (playlist.encryptedId === '' || playlist.trackCount === 0) continue;
       try {
-        const tracks = await fetchPlaylistTracks(playlist);
-        const songs = tracks
-          .map(normalizeMoodPlaylistTrack)
-          .filter(Boolean)
-          .slice(0, 100);
-        if (songs.length > 0) return songs;
+        const tracks = await fetchPlaylistTracks(playlist, 100);
+        const songs = tracks.map(normalizeMoodPlaylistTrack).filter(Boolean);
+        for (const song of songs) {
+          if (seen.has(song.encryptedId)) continue;
+          seen.add(song.encryptedId);
+          collected.push(song);
+          if (collected.length >= 300) break;
+        }
+        if (collected.length >= 300) break;
       } catch {
         // Try the next playlist.
       }
     }
+    return collected;
   } catch {
     // No playlist fallback available.
   }
